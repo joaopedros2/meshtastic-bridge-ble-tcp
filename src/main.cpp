@@ -25,7 +25,7 @@ static const char* PROJECT_SLUG = "meshtastic-bridge-ble-tcp";  // hostname, AP,
 static const char* LEGACY_SLUG = "meshtastic-ble-bridge";       // pre-1.3.2 default, migrated on boot
 static const char* AP_PASSWORD = "meshtastic";            // min 8 chars (WPA2)
 
-static const char* FW_VERSION = "1.3.2";
+static const char* FW_VERSION = "1.3.3";
 // Shown in the router/DHCP list and used for mDNS (<name>.local); editable on the web page
 
 // Meshtastic GATT UUIDs
@@ -643,10 +643,11 @@ static void discoverSensor(const char* key, const char* name, const char* extra,
   publishDiscovery("sensor", key, j);
 }
 
-// HA-side template: seconds -> "2d 03h 15m" (the payload stays numeric seconds)
+// HA-side template: seconds -> "14m", "1h 23m" or "2d 03h 15m" (leading zero units hidden)
 static String humanDuration(const char* key) {
   return "{% set s = value_json." + String(key) + " | int(0) %}"
-         "{{ '%dd %02dh %02dm' % (s // 86400, s % 86400 // 3600, s % 3600 // 60) }}";
+         "{% set d = s // 86400 %}{% set h = s % 86400 // 3600 %}{% set m = s % 3600 // 60 %}"
+         "{{ ('%dd %02dh %02dm' % (d, h, m)) if d else (('%dh %02dm' % (h, m)) if h else ('%dm' % m)) }}";
 }
 
 static void publishAllDiscovery() {

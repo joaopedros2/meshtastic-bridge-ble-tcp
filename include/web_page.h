@@ -246,7 +246,8 @@ function mini(title,cls,state,right,rows){
 }
 // Short durations keep seconds (useful right after a reconnect)
 function fmtDur(s){return s<60?s+' s':s<3600?Math.floor(s/60)+'m '+(s%60)+'s':fmtUp(s)}
-function fmtUp(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return (d?d+'d ':'')+h+'h '+m+'m'}
+function fmtUp(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),p=n=>String(n).padStart(2,'0');
+  return d?`${d}d ${p(h)}h ${p(m)}m`:h?`${h}h ${p(m)}m`:`${m}m`}
 
 async function refresh(){
   try{
