@@ -26,7 +26,7 @@ pre{white-space:pre-wrap;word-break:break-word}
 .logo{display:flex;align-items:center;gap:10px}.logo svg{flex:none}
 .sub{color:var(--mut);font-size:13px}
 section{background:var(--card);border-radius:16px;padding:16px;margin-bottom:14px}
-.view[hidden]{display:none}
+[hidden]{display:none!important}  /* .btns/.view set display, which would override the hidden attribute */
 .link{color:var(--acc);cursor:pointer;text-decoration:underline}
 h2{font-size:13px;margin:0 0 12px;color:var(--acc);text-transform:uppercase;letter-spacing:.06em;font-weight:600}
 .row{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--line)}.row:last-child{border:0}
@@ -61,6 +61,30 @@ progress{width:100%;accent-color:var(--acc)}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 h1{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 h1 .pill{font-size:12px;font-weight:600;background:var(--acc);color:var(--accfg);border-radius:10px;padding:3px 9px}
+.sechd{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.sechd h2{margin:0}
+button.small{padding:5px 14px;font-size:13px}
+@media(min-width:900px){.grid.home .logs pre{top:52px}}
+.toggle{display:flex;justify-content:space-between;align-items:center;gap:12px;background:var(--card2);border-radius:12px;padding:12px 14px;margin:0 0 14px;cursor:pointer}
+#bleCard.off .toggle{margin:0}
+.toggle .tt{display:block;font-weight:600;color:var(--fg);font-size:15px}.toggle .ts{display:block;font-size:12px;color:var(--mut)}
+.toggle input{position:absolute;opacity:0;width:0;height:0}
+.sw{position:relative;width:46px;height:26px;border-radius:13px;background:var(--line);flex:none;transition:.2s}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:var(--fg);transition:.2s}
+.toggle input:checked+.sw{background:var(--acc)}.toggle input:checked+.sw::after{left:23px;background:var(--accfg)}
+#bleCard.off{outline:1px solid var(--warn)}
+.disc{border-top:1px solid var(--line);margin-top:16px;padding-top:14px}
+.disc input[type=file]{margin:10px 0 8px}
+.badge{font-size:12px;font-weight:600;border-radius:10px;padding:3px 9px;background:var(--card2);color:var(--mut)}.badge.on{background:var(--acc);color:var(--accfg)}
+.pw{position:relative}.pw input{padding-right:46px}
+.pw .eye{position:absolute;right:6px;top:4px;height:42px;width:38px;padding:0;border-radius:8px;background:transparent;color:var(--mut);display:flex;align-items:center;justify-content:center;touch-action:none;user-select:none;-webkit-user-select:none}
+.pw .eye:hover,.pw .eye.on{color:var(--acc)}
+.nbat{display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:8px}
+.batt{position:relative;width:24px;height:12px;border:1.5px solid var(--mut);border-radius:3px}
+.batt::after{content:"";position:absolute;right:-4px;top:3px;width:2px;height:4px;background:var(--mut);border-radius:1px}
+.batt i{position:absolute;left:1px;top:1px;bottom:1px;border-radius:1px}
+.nid{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.npill{min-width:56px;text-align:center;padding:5px 10px;border-radius:9px;font-weight:700;font-size:14px}
+.nname{font-weight:600}.nfw{font-size:11px;color:var(--mut)}
 .brand{display:flex;align-items:center;gap:12px}.brand .logo{width:40px;height:40px;flex:none}
 footer{text-align:center;color:var(--mut);font-size:12px;padding:8px 0 24px}
 </style></head><body><main>
@@ -79,7 +103,7 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:8px 0 24px}
 <section><h2 data-i18n="status"></h2><div id="status" data-i18n="loading"></div></section>
 </div>
 <div class="col">
-<section class="logs"><h2>Logs</h2><pre id="logs"></pre></section>
+<section class="logs"><div class="sechd"><h2>Logs</h2><div class="btns"><button class="sec small" onclick="clearLogs()" data-i18n="clear"></button><button class="sec small" id="copyBtn" onclick="copyLogs()" data-i18n="copy"></button></div></div><pre id="logs"></pre></section>
 </div>
 </div>
 </div>
@@ -88,13 +112,17 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:8px 0 24px}
 <div class="view" id="view-settings" hidden>
 <div class="grid">
 <div class="col">
-<section><h2 data-i18n="ble_node"></h2>
+<section id="bleCard"><h2 data-i18n="ble_node"></h2>
+<label class="toggle"><span><span class="tt" data-i18n="ble_link"></span><span class="ts" id="bleLinkNote"></span></span>
+<input type="checkbox" id="bleEn" onchange="bleToggle(this.checked)"><span class="sw"></span></label>
+<div id="bleFields">
 <div class="btns"><button id="bleScanBtn" class="sec" onclick="bleScan()" data-i18n="scan_nodes"></button></div>
 <div id="bleList" class="list"></div>
 <label data-i18n="mac_address"></label><input id="bleMac" placeholder="c2:23:3f:7d:89:03">
 <input id="bleType" type="hidden" value="1">
 <label data-i18n="ble_pin"></label><input id="blePin" inputmode="numeric" placeholder="123456">
-<button onclick="bleSave()" data-i18n="save_connect"></button><div id="bleMsg" class="msg"></div>
+<div class="btns"><button onclick="bleSave()" data-i18n="save_connect"></button></div>
+</div><div id="bleMsg" class="msg"></div>
 </section>
 <section><h2>Wi-Fi</h2>
 <div class="btns"><button id="wifiScanBtn" class="sec" onclick="wifiScan()" data-i18n="scan_networks"></button></div>
@@ -103,17 +131,6 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:8px 0 24px}
 <label data-i18n="password"></label><input id="wpass" type="password">
 <button onclick="wifiSave()" data-i18n="save_restart"></button><div id="wifiMsg" class="msg"></div>
 </section>
-<section><h2>Firmware</h2>
-<input id="fw" type="file" accept=".bin">
-<progress id="fwProg" value="0" max="100" hidden></progress>
-<div class="btns"><button onclick="otaUpload()" data-i18n="update"></button></div><div id="fwMsg" class="msg"></div>
-</section>
-<section><h2 data-i18n="reset"></h2>
-<div class="msg" style="margin:0 0 8px" data-i18n="reset_hint"></div>
-<button class="danger" onclick="factoryReset()" data-i18n="factory_reset"></button><div id="resetMsg" class="msg"></div>
-</section>
-</div>
-<div class="col">
 <section><h2 data-i18n="device"></h2>
 <label data-i18n="hostname_label"></label>
 <input id="hostname" placeholder="meshtastic-bridge-ble-tcp">
@@ -121,6 +138,8 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:8px 0 24px}
 <label data-i18n="language" style="display:block;margin-top:14px"></label>
 <select id="langSel" onchange="setLang(this.value)"><option value="pt">Português (PT)</option><option value="en">English</option></select>
 </section>
+</div>
+<div class="col">
 <section><h2>MQTT</h2>
 <div class="msg" style="margin:0 0 10px" data-i18n="mqtt_hint"></div>
 <label class="chk"><input type="checkbox" id="mqEn"><span data-i18n="mqtt_enable"></span></label>
@@ -133,12 +152,30 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:8px 0 24px}
 <div><label data-i18n="mqtt_base"></label><input id="mqBase" placeholder="meshtastic-bridge-ble-tcp"></div></div>
 <div id="mqTopic" class="msg" style="margin:0 0 10px"></div>
 <button onclick="mqttSave()" data-i18n="save"></button><div id="mqMsg" class="msg"></div>
+<div class="disc">
+<div class="sechd"><b data-i18n="disc_title"></b><span id="discBadge" class="badge"></span></div>
+<div id="discInfo" class="kv"></div>
+<div class="btns" style="margin-top:12px"><button class="sec" onclick="discDownload()" data-i18n="disc_download"></button>
+<button class="sec" onclick="discReset()" data-i18n="disc_reset"></button></div>
+<input id="discFile" type="file" accept=".json,application/json">
+<button onclick="discUpload()" data-i18n="disc_upload"></button><div id="discMsg" class="msg"></div>
+<div class="msg" data-i18n="disc_hint"></div>
+</div>
 </section>
 <section><h2 data-i18n="security"></h2>
 <div class="msg" style="margin:0 0 8px" data-i18n="security_hint"></div>
 <label data-i18n="username"></label><input id="webUser" placeholder="admin" autocomplete="username">
 <label data-i18n="password_empty"></label><input id="webPass" type="password" autocomplete="new-password">
 <button onclick="webAuthSave()" data-i18n="save"></button><div id="secMsg" class="msg"></div>
+</section>
+<section><h2>Firmware</h2>
+<input id="fw" type="file" accept=".bin">
+<progress id="fwProg" value="0" max="100" hidden></progress>
+<div class="btns"><button onclick="otaUpload()" data-i18n="update"></button></div><div id="fwMsg" class="msg"></div>
+</section>
+<section><h2 data-i18n="reset"></h2>
+<div class="msg" style="margin:0 0 8px" data-i18n="reset_hint"></div>
+<button class="danger" onclick="factoryReset()" data-i18n="factory_reset"></button><div id="resetMsg" class="msg"></div>
 </section>
 </div>
 </div>
@@ -148,7 +185,7 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:8px 0 24px}
 <script>
 // ---------- i18n (EN / PT-PT) ----------
 const I18N={
-en:{reboot:'Restart',secured:'secured',nav_home:'Home',nav_settings:'Settings',language:'Page language',mqtt_hint:'Publishes the bridge status to Home Assistant via MQTT discovery (device appears automatically).',mqtt_enable:'Enable MQTT',mqtt_host:'Broker address',mqtt_port:'Port',mqtt_interval:'Update interval (s)',mqtt_discovery:'Discovery prefix',mqtt_base:'Base topic',mqtt_topic:'Topics',pass_unchanged:'(unchanged)',saved_mqtt:'Saved. Connecting to the broker…',err_empty_host:'broker address is empty',err_invalid_port:'invalid port',err_invalid_interval:'interval must be 5–3600 s',setup_title:'First-time setup',status:'Status',loading:'Loading…',ble_node:'Bluetooth node',
+en:{reboot:'Restart',secured:'secured',nav_home:'Home',nav_settings:'Settings',language:'Page language',node_card:'Node',waiting_node:'Waiting for node information…',powered:'External power',custom_preset:'Custom',ble_disabled:'Off',ble_link:'Link to node',link_on_note:'On — the bridge is connected to the node',link_off_note:'Off — the node is free for the phone over Bluetooth',err_invalid_duration:'invalid duration',err_no_node:'no node configured',clear:'Clear',show_password:'Hold to show the password',copy:'Copy',copied:'Copied',copy_failed:'Copy failed',ble_err_pin_rejected:'PIN rejected by the node',ble_err_stale_pairing:'Old pairing no longer valid — pairing again',ble_err_pairing_unsupported:'Node refused pairing — set Bluetooth to Fixed PIN',ble_err_out_of_range:'Node not reachable',ble_err_node_closed:'Node closed the connection',disc_title:'Home Assistant discovery',disc_default:'Default',disc_custom:'Custom',disc_file:'File',disc_fw_default:'Firmware default',disc_entities:'Entities',disc_ignored:n=>n+' ignored',disc_loaded:'Loaded',disc_download:'Download current',disc_reset:'Restore default',disc_upload:'Upload and publish',disc_hint:'Changes entity names, icons, units and categories. New node data needs new firmware.',disc_done:(n,i)=>`Published: ${n} entities`+(i?`, ${i} ignored`:''),pick_json:'Choose the ha_mqtt_discovery.json file',confirm_disc_reset:'Restore the default Home Assistant entities?',disc_reset_done:'Default restored and published',err_invalid_json:'not a valid discovery file (JSON with an "entities" list)',err_no_entities:'no valid entity in the file',err_file_too_big:'file larger than 16 KB',err_invalid_file:'empty file',err_no_storage:'storage unavailable on the ESP32',err_write_failed:'could not save the file',mqtt_hint:'Publishes the bridge status to Home Assistant via MQTT discovery (device appears automatically).',mqtt_enable:'Enable MQTT',mqtt_host:'Broker address',mqtt_port:'Port',mqtt_interval:'Update interval (s)',mqtt_discovery:'Discovery prefix',mqtt_base:'Base topic',mqtt_topic:'Topics',pass_unchanged:'(unchanged)',saved_mqtt:'Saved. Connecting to the broker…',err_empty_host:'broker address is empty',err_invalid_port:'invalid port',err_invalid_interval:'interval must be 5–3600 s',setup_title:'First-time setup',status:'Status',loading:'Loading…',ble_node:'Bluetooth node',
  scan_nodes:'Scan nodes',mac_address:'MAC address',ble_pin:'Bluetooth PIN',save_connect:'Save and connect',
  scan_networks:'Scan networks',password:'Password',save_restart:'Save and restart',device:'Device',
  hostname_label:'Network name (router and mDNS: <name>.local)',security:'Security',
@@ -174,7 +211,7 @@ en:{reboot:'Restart',secured:'secured',nav_home:'Home',nav_settings:'Settings',l
  confirm_host:'The ESP32 will restart with the new name. Continue?',saved_restarting:'Saved. Restarting…',
  err_prefix:'Error: ',err_invalid_mac:'invalid MAC address',err_empty_ssid:'SSID is empty',
  err_invalid_user:'username cannot contain ":"',err_invalid_hostname:'invalid name (a-z, 0-9, "-", max 32)'},
-pt:{reboot:'Reiniciar',secured:'protegida',nav_home:'Início',nav_settings:'Definições',language:'Idioma da página',mqtt_hint:'Publica o estado da ponte no Home Assistant por MQTT discovery (o dispositivo aparece sozinho).',mqtt_enable:'Ativar MQTT',mqtt_host:'Endereço do broker',mqtt_port:'Porta',mqtt_interval:'Intervalo de envio (s)',mqtt_discovery:'Prefixo de discovery',mqtt_base:'Tópico base',mqtt_topic:'Tópicos',pass_unchanged:'(mantém a atual)',saved_mqtt:'Guardado. A ligar ao broker…',err_empty_host:'endereço do broker vazio',err_invalid_port:'porta inválida',err_invalid_interval:'o intervalo tem de ser entre 5 e 3600 s',setup_title:'Primeira configuração',status:'Estado',loading:'A carregar…',ble_node:'Nó Bluetooth',
+pt:{reboot:'Reiniciar',secured:'protegida',nav_home:'Início',nav_settings:'Definições',language:'Idioma da página',node_card:'Nó',waiting_node:'A aguardar informação do nó…',powered:'Alimentação externa',custom_preset:'Personalizado',ble_disabled:'Desligado',ble_link:'Ligação ao nó',link_on_note:'Ligada — a ponte está ligada ao nó',link_off_note:'Desligada — o nó está livre para o telemóvel por Bluetooth',err_invalid_duration:'duração inválida',err_no_node:'nenhum nó configurado',clear:'Limpar',show_password:'Mantém premido para ver a password',copy:'Copiar',copied:'Copiado',copy_failed:'Falhou a cópia',ble_err_pin_rejected:'PIN rejeitado pelo nó',ble_err_stale_pairing:'Emparelhamento antigo inválido — a emparelhar de novo',ble_err_pairing_unsupported:'O nó recusou o emparelhamento — põe o Bluetooth em Fixed PIN',ble_err_out_of_range:'Nó fora de alcance',ble_err_node_closed:'O nó fechou a ligação',disc_title:'Discovery do Home Assistant',disc_default:'Predefinido',disc_custom:'Personalizado',disc_file:'Ficheiro',disc_fw_default:'Predefinido do firmware',disc_entities:'Entidades',disc_ignored:n=>n+(n==1?' ignorada':' ignoradas'),disc_loaded:'Carregado',disc_download:'Descarregar atual',disc_reset:'Repor predefinido',disc_upload:'Carregar e publicar',disc_hint:'Muda nomes, ícones, unidades e categorias das entidades. Dados novos do nó precisam de firmware novo.',disc_done:(n,i)=>`Publicado: ${n} entidades`+(i?`, ${i} `+(i==1?'ignorada':'ignoradas'):''),pick_json:'Escolhe o ficheiro ha_mqtt_discovery.json',confirm_disc_reset:'Repor as entidades predefinidas do Home Assistant?',disc_reset_done:'Predefinido reposto e publicado',err_invalid_json:'não é um ficheiro de discovery válido (JSON com uma lista "entities")',err_no_entities:'nenhuma entidade válida no ficheiro',err_file_too_big:'ficheiro com mais de 16 KB',err_invalid_file:'ficheiro vazio',err_no_storage:'armazenamento indisponível no ESP32',err_write_failed:'não foi possível guardar o ficheiro',mqtt_hint:'Publica o estado da ponte no Home Assistant por MQTT discovery (o dispositivo aparece sozinho).',mqtt_enable:'Ativar MQTT',mqtt_host:'Endereço do broker',mqtt_port:'Porta',mqtt_interval:'Intervalo de envio (s)',mqtt_discovery:'Prefixo de discovery',mqtt_base:'Tópico base',mqtt_topic:'Tópicos',pass_unchanged:'(mantém a atual)',saved_mqtt:'Guardado. A ligar ao broker…',err_empty_host:'endereço do broker vazio',err_invalid_port:'porta inválida',err_invalid_interval:'o intervalo tem de ser entre 5 e 3600 s',setup_title:'Primeira configuração',status:'Estado',loading:'A carregar…',ble_node:'Nó Bluetooth',
  scan_nodes:'Procurar nós',mac_address:'Endereço MAC',ble_pin:'PIN Bluetooth',save_connect:'Guardar e ligar',
  scan_networks:'Procurar redes',password:'Password',save_restart:'Guardar e reiniciar',device:'Dispositivo',
  hostname_label:'Nome na rede (router e mDNS: <nome>.local)',security:'Segurança',
@@ -216,8 +253,8 @@ function setLang(l){lang=l;try{localStorage.setItem('lang',lang)}catch(e){}apply
 const $=id=>document.getElementById(id);
 const post=(url,data)=>fetch(url,{method:'POST',body:new URLSearchParams(data||{})}).then(r=>r.json());
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const bleClass={ready:'ok',connecting:'warn',failed:'bad',idle:'warn',not_configured:'bad'};
-let formFilled=false,apName='';
+const bleClass={ready:'ok',connecting:'warn',failed:'bad',idle:'warn',not_configured:'bad',disabled:'warn'};
+let formFilled=false,apName='',lastVersion='';
 
 function row(k,v,cls){return `<div class="row"><span>${k}</span><span class="${cls||''}">${v}</span></div>`}
 // Device stamps lines with uptime (H:MM:SS); show them in the browser's local time.
@@ -238,16 +275,37 @@ function signal(rssi,best){
   const bars=[4,7,10,13].map((ht,i)=>`<i style="height:${ht}px" class="${i<n?'':'off'}"></i>`).join('');
   return `<span class="sub">${rssi} dBm<span class="bars">${bars}</span></span>`;
 }
-function mini(title,cls,state,right,rows){
+function mini(title,cls,state,right,rows,extra=''){
   const dot=cls?`<span class="dot ${cls}"></span>`:'';
   const st=state?` <span class="${cls} sub">· ${state}</span>`:'';
   return `<div class="mini"><div class="hd"><span class="t">${dot}${title}${st}</span>${right}</div>
-    <div class="kv">${rows.map(([k,v])=>`<span>${k}</span><span>${v}</span>`).join('')}</div></div>`;
+    <div class="kv">${rows.map(([k,v])=>`<span>${k}</span><span>${v}</span>`).join('')}</div>${extra}</div>`;
 }
 // Short durations keep seconds (useful right after a reconnect)
-function fmtDur(s){return s<60?s+' s':s<3600?Math.floor(s/60)+'m '+(s%60)+'s':fmtUp(s)}
-function fmtUp(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),p=n=>String(n).padStart(2,'0');
-  return d?`${d}d ${p(h)}h ${p(m)}m`:h?`${h}h ${p(m)}m`:`${m}m`}
+const fmtDur=fmtUp;
+// Node card in the style of the Meshtastic app header: battery, short-name pill, long name, firmware, radio
+const REGIONS=['UNSET','US','EU_433','EU_868','CN','JP','ANZ','KR','TW','RU','IN','NZ_865','TH','LORA_24','UA_433','UA_868','MY_433','MY_919','SG_923','PH_433','PH_868','PH_915','ANZ_433','KZ_433','KZ_863','NP_865','BR_902','ITU1_2M','ITU2_2M','EU_866','EU_874','EU_917','EU_N_868','ITU3_2M'];
+const REGION_LABEL={US:'United States',EU_433:'European Union 433MHz',EU_868:'European Union 868MHz',UA_868:'Ukraine 868MHz',ANZ:'Australia / New Zealand'};
+const PRESETS=['Long Range - Fast','Long Range - Slow','Very Long Range - Slow','Medium Range - Slow','Medium Range - Fast','Short Range - Slow','Short Range - Fast','Long Range - Moderate','Short Range - Turbo','Long Range - Turbo','Lite - Fast','Lite - Slow','Narrow - Fast','Narrow - Slow'];
+function nodeCard(n){
+  if(!n||!n.id)return `<div class="mini"><div class="hd"><span class="t">${t('node_card')}</span></div><div class="sub">${t('waiting_node')}</div></div>`;
+  const num=parseInt(n.id.slice(1),16)||0,r=num>>16&255,g=num>>8&255,bl=num&255;  // pill colour = node number, as in the app
+  const pill=`background:rgb(${r},${g},${bl});color:${0.299*r+0.587*g+0.114*bl>150?'#000':'#fff'}`;
+  const loc=lang==='pt'?'pt-PT':'en-GB',num2=(v,d)=>v.toLocaleString(loc,{minimumFractionDigits:d,maximumFractionDigits:d});
+  let bat='';
+  if(n.battery!=null){
+    const pct=Math.min(n.battery,100),col=pct>50?'var(--ok)':pct>20?'var(--warn)':'var(--bad)';
+    const txt=n.battery>100?t('powered'):n.battery+'%';
+    bat=`<div class="nbat"><span>${txt}${n.voltage!=null?' · '+num2(n.voltage,2)+' V':''}</span><span class="batt"><i style="width:${pct*0.85}%;background:${col}"></i></span></div>`;
+  }
+  const preset=n.use_preset?(PRESETS[n.preset]||'—'):t('custom_preset');
+  const region=n.region==null?'':' · '+(REGION_LABEL[REGIONS[n.region]]||REGIONS[n.region]||n.region);
+  return `<div class="mini">${bat}<div class="nid"><span class="npill" style="${pill}">${esc(n.short_name||'?')}</span>
+    <div><div class="nname">${esc(n.long_name||n.id)}</div><div class="nfw">Firmware ${esc(n.fw||'—')}</div></div></div>
+    <div class="sub">${preset}${esc(region)}</div></div>`;
+}
+function fmtUp(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),x=s%60,p=n=>String(n).padStart(2,'0');
+  return d?`${d}d ${p(h)}h ${p(m)}m ${p(x)}s`:h?`${h}h ${p(m)}m ${p(x)}s`:m?`${m}m ${p(x)}s`:`${x}s`}
 
 async function refresh(){
   try{
@@ -256,29 +314,43 @@ async function refresh(){
     const b=s.ble,w=s.wifi,cl=s.tcp.clients;
     let bk=[[t('node'),esc(b.name||'—')],['MAC',esc(b.target||'—')]];
     if(b.state==='ready')bk.push([t('ble_uptime'),fmtDur(b.connected_s)],[t('last_packet'),b.last_rx_s<0?'—':t('ago',b.last_rx_s)]);
-    if(b.state==='failed')bk.push([t('error'),`<span class="bad">${esc(b.stage)} (${b.error})</span>`],[t('retry'),t('in_s',Math.ceil(b.retry_in_ms/1000))]);
+    if(b.state==='failed'){const why=I18N[lang]['ble_err_'+b.error_key]||esc(b.stage);
+      bk.push([t('error'),`<span class="bad">${why} (${b.error})</span>`],[t('retry'),t('in_s',Math.ceil(b.retry_in_ms/1000))]);}
     let wk=[[t('network'),w.connected?esc(w.ssid):`<span class="bad">${t('disconnected')}</span>`],['IP',w.ip||'—']];
     if(w.ap)wk.push([t('access_point'),`<span class="warn">${esc(w.ap_ssid)} · ${w.ap_ip}</span>`]);
     wk.push([t('tcp_clients')+' ('+cl.length+'/'+s.tcp.max+')',cl.length?cl.join('<br>'):t('none')]);
     if(s.mqtt.enabled)wk.push(['MQTT',s.mqtt.connected?`<span class="ok">${t('ble_ready')}</span>`:`<span class="bad">${t('disconnected')} (rc ${s.mqtt.rc})</span>`]);
-    let h=mini('Bluetooth',bleClass[b.state],t('ble_'+b.state),b.state==='ready'?signal(b.rssi,-70):'',bk);
+    let h=nodeCard(s.node);
+    h+=mini('Bluetooth',bleClass[b.state],t('ble_'+b.state),b.state==='ready'?signal(b.rssi,-70):'',bk);
+    // Settings switch mirrors the device state (unless the user is touching it)
+    if(document.activeElement!==$('bleEn'))$('bleEn').checked=b.enabled;
+    $('bleCard').classList.toggle('off',!b.enabled);$('bleFields').hidden=!b.enabled;  // off: only the switch is shown
+    $('bleLinkNote').textContent=b.enabled?t('link_on_note'):t('link_off_note');
     h+=mini('Wi-Fi',w.connected?'ok':'bad',w.connected?t('ble_ready'):t('disconnected'),w.connected?signal(w.rssi,-60):'',wk);
     h+=mini(t('system'),'','',`<span class="sub">v${esc(s.version)}</span>`,[[t('uptime'),fmtUp(s.uptime)],[t('free_mem'),Math.round(s.heap/1024)+' KB']]);
     $('status').innerHTML=h;
-    $('ver').textContent='v'+s.version;
+    $('ver').textContent='v'+s.version;lastVersion=s.version;
     const steps=[];
     if(!s.wifi.configured)steps.push(t('step_wifi'));
     if(!s.ble.target)steps.push(t('step_ble'));
     $('setup').hidden=!steps.length;$('setupSteps').innerHTML=steps.map((x,i)=>(i+1)+'. '+x).join('<br>');
     apName=s.wifi.ap_ssid;
-    if(!formFilled){$('bleMac').value=s.ble.target;$('bleType').value=s.ble.addr_type;$('ssid').value=s.wifi.ssid;$('hostname').value=s.hostname;$('webUser').value=s.web_user;
+    if(!formFilled){$('bleMac').value=s.ble.target;$('bleType').value=s.ble.addr_type;$('ssid').value=s.wifi.ssid;$('hostname').value=s.hostname;$('hostname').placeholder=s.default_hostname;$('webUser').value=s.web_user;
       const m=s.mqtt;$('mqEn').checked=m.enabled;$('mqHost').value=m.host;$('mqPort').value=m.port;$('mqUser').value=m.user;
       $('mqDisc').value=m.discovery;$('mqBase').value=m.base;$('mqInt').value=m.interval;$('mqPass').placeholder=m.has_pass?t('pass_unchanged'):'';
       formFilled=true}
     $('mqTopic').textContent=t('mqtt_topic')+': '+s.mqtt.topic+'/…';
+    const m=s.mqtt,dk=[[t('disc_file'),m.disc_custom?esc(m.disc_file):t('disc_fw_default')],
+      [t('disc_entities'),m.disc_entities+(m.disc_ignored?' ('+t('disc_ignored',m.disc_ignored)+')':'')]];
+    if(m.disc_custom&&m.disc_loaded)dk.push([t('disc_loaded'),new Date(m.disc_loaded).toLocaleString(lang==='pt'?'pt-PT':'en-GB',{dateStyle:'short',timeStyle:'short'})]);
+    $('discInfo').innerHTML=dk.map(([k,v])=>`<span>${k}</span><span>${v}</span>`).join('');
+    $('discBadge').textContent=t(m.disc_custom?'disc_custom':'disc_default');$('discBadge').classList.toggle('on',m.disc_custom);
     const lr=await fetch('/api/logs'),up=+lr.headers.get('X-Uptime'),txt=await lr.text();
     const pre=$('logs'),atEnd=pre.scrollHeight-pre.scrollTop-pre.clientHeight<20;
-    pre.textContent=txt.split('\n').filter(Boolean).map(l=>logTime(l,up)).join('\n');
+    let raw=txt.split('\n').filter(Boolean);lastLogLine=raw[raw.length-1]||lastLogLine;
+    if(logClear){const i=raw.lastIndexOf(logClear.line);  // hide what was there when Clear was pressed
+      raw=i>=0?raw.slice(i+1):raw.filter(l=>{const m=l.match(/^(\d+):(\d\d):(\d\d)/);return !m||+m[1]*3600+(+m[2])*60+(+m[3])>logClear.up})}
+    pre.textContent=raw.map(l=>logTime(l,up)).join('\n');
     if(atEnd)pre.scrollTop=pre.scrollHeight;  // follow new lines, like tail -f
   }catch(e){$('status').innerHTML=row(t('connection'),t('no_response'),'bad')}
 }
@@ -348,6 +420,46 @@ async function mqttSave(){
   $('mqMsg').textContent=r.ok?t('saved_mqtt'):errText(r.error);
   if(r.ok)$('mqPass').value='';
 }
+// Discovery file: the browser reads it and sends the JSON (plus its name and the local time)
+function discDownload(){location.href='/api/mqtt/discovery'}
+async function discUpload(){
+  const f=$('discFile').files[0],msg=$('discMsg');
+  if(!f){msg.textContent=t('pick_json');return}
+  if(f.size>16384){msg.textContent=errText('file_too_big');return}
+  const body=await f.text();
+  try{JSON.parse(body)}catch(e){msg.textContent=errText('invalid_json');return}
+  let r;
+  try{r=await (await fetch('/api/mqtt/discovery?name='+encodeURIComponent(f.name)+'&ts='+Date.now(),
+    {method:'POST',headers:{'Content-Type':'application/json'},body})).json()}catch(e){r={ok:false,error:'net'}}
+  msg.textContent=r.ok?t('disc_done',r.entities,r.ignored):r.error==='net'?t('net_error'):errText(r.error);
+  if(r.ok){$('discFile').value='';refresh()}
+}
+async function discReset(){
+  if(!confirm(t('confirm_disc_reset')))return;
+  const r=await post('/api/mqtt/discovery/reset');
+  $('discMsg').textContent=r.ok?t('disc_reset_done'):t('net_error');refresh();
+}
+async function bleToggle(on){
+  $('bleFields').hidden=!on;$('bleCard').classList.toggle('off',!on);
+  const r=await post('/api/ble/enable',{enabled:on?'1':'0'});
+  if(!r.ok)$('bleMsg').textContent=t('net_error');
+  refresh();
+}
+// Clear only hides lines in this page; the ESP32 keeps its buffer (and USB serial shows everything)
+let logClear=null,lastLogLine='';
+function clearLogs(){
+  const m=lastLogLine.match(/^(\d+):(\d\d):(\d\d)/);
+  logClear={line:lastLogLine,up:m?+m[1]*3600+(+m[2])*60+(+m[3]):0};$('logs').textContent='';
+}
+// Clipboard API needs HTTPS; the bridge is plain HTTP, so fall back to a hidden textarea
+async function copyLogs(){
+  const text=`${document.title} v${lastVersion} — ${new Date().toLocaleString()}\n`+$('logs').textContent;
+  let ok=false;
+  try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(text);ok=true}}catch(e){}
+  if(!ok){const ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';
+    document.body.appendChild(ta);ta.select();try{ok=document.execCommand('copy')}catch(e){}ta.remove()}
+  const b=$('copyBtn');b.textContent=ok?t('copied'):t('copy_failed');setTimeout(()=>b.textContent=t('copy'),2000);
+}
 async function hostSave(){
   if(!confirm(t('confirm_host')))return;
   const r=await post('/api/device/config',{hostname:$('hostname').value});
@@ -361,5 +473,19 @@ function showView(){
 }
 window.addEventListener('hashchange',showView);
 
-applyLang();showView();refresh();setInterval(refresh,3000);
+// Password fields: the eye shows the text only while it is held down (mouse or touch)
+function addEyes(){
+  const svg='<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+  document.querySelectorAll('input[type=password]').forEach(inp=>{
+    const w=document.createElement('div');w.className='pw';inp.before(w);w.append(inp);
+    const b=document.createElement('button');b.type='button';b.className='eye';b.tabIndex=-1;b.innerHTML=svg;
+    b.setAttribute('aria-label',t('show_password'));w.append(b);
+    const show=e=>{e.preventDefault();inp.type='text';b.classList.add('on')};
+    const hide=()=>{inp.type='password';b.classList.remove('on')};
+    b.addEventListener('pointerdown',show);
+    for(const ev of ['pointerup','pointerleave','pointercancel','blur'])b.addEventListener(ev,hide);
+    b.addEventListener('contextmenu',e=>e.preventDefault());  // long-press on phones
+  });
+}
+applyLang();addEyes();showView();refresh();setInterval(refresh,3000);
 </script></body></html>)HTML";

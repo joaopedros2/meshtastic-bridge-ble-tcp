@@ -14,9 +14,10 @@ Built for nRF52 nodes such as the SenseCAP Solar Node, RAK4631, T-Echo or T1000-
 - **Up to 4 clients at once** (e.g. Home Assistant and the app); live mesh traffic goes to all, config requests are served one at a time
 - **Web page** (EN / PT-PT, desktop and mobile): status, logs, Bluetooth node scan, Wi-Fi setup, network name, page login
 - **First-time setup access point** — no credentials or node address are built into the firmware
-- **MQTT with Home Assistant discovery**: the bridge shows up as a device with BLE/Wi-Fi signal, connection state, reconnect counter, uptime and restart/reconnect buttons
+- **MQTT with Home Assistant discovery**: bridge and node diagnostics (signal, link state, battery, channel utilization, nodes online, packet counters, noise floor…) plus Restart, Bluetooth reconnect and Bluetooth link controls; entities customizable by uploading `ha_mqtt_discovery.json`
 - **OTA updates** from the browser
-- mDNS (`meshtastic-bridge-ble-tcp.local`) so apps can discover the bridge
+- mDNS (`meshtastic-bridge-ble-tcp-xxxx.local`) so apps can discover the bridge
+- Node card on the status page (battery, name, firmware, radio)
 - Automatic BLE reconnect with backoff and dead-link detection
 
 ![Settings](docs/settings.png)
@@ -58,6 +59,12 @@ Later updates can be done from **Settings → Firmware** with `.pio/build/esp32d
    Nodes with a screen show a random PIN — set them to **Fixed PIN** in the Meshtastic app first (default `123456`).
 5. Make sure no phone or PC is connected to the node over Bluetooth: a node accepts only one BLE connection.
 
+### Several bridges
+
+Use one bridge per node. Each one gets its own name from the chip id (`XXXX`, the same as its setup network):
+`meshtastic-bridge-ble-tcp-xxxx` on the network and `.local`, and **Meshtastic Bridge BLE-TCP XXXX** in Home Assistant.
+To use a name of your own (e.g. `bridge-solar-roof`), set it in **Settings → Device** — ideally before enabling MQTT, so the HA entity ids are created with it. MQTT topics and discovery ids always include the chip id, so bridges never clash.
+
 ## Connecting
 
 - **Meshtastic app:** connection type *Network*, address = the bridge IP (or pick it from the scan).
@@ -68,7 +75,43 @@ Later updates can be done from **Settings → Firmware** with `.pio/build/esp32d
 
 Enable it in **Settings → MQTT** (broker, port, user, password). Topics live under `meshtastic-bridge-ble-tcp/<chip-id>/`, discovery under `homeassistant/`.
 
-Entities: Bluetooth connected, Bluetooth state, Bluetooth RSSI, Bluetooth connected for, Bluetooth reconnects, TCP clients, Node name, WiFi RSSI, IP address, Uptime, Free memory, plus Restart and Reconnect Bluetooth buttons. The device goes *unavailable* in HA when the bridge is offline.
+Two devices appear in Home Assistant:
+
+- **The bridge** (`Meshtastic Bridge BLE-TCP XXXX`): Bluetooth connected, Bluetooth state, Bluetooth RSSI, Bluetooth connected for, Bluetooth reconnects, TCP clients; controls: Restart, Bluetooth reconnect (buttons), Bluetooth link (switch); diagnostics: status, node Bluetooth name, Wi-Fi SSID, Wi-Fi RSSI, IP, uptime, free memory, DNS address, Wi-Fi MAC address, internal temperature.
+- **The node** (`Meshtastic Node 8903`, from the last 4 digits of its node id), linked to the bridge (model, firmware and node id as serial number): position (device tracker, when the node shares one), battery, voltage, channel utilization, airtime TX, uptime, online / known nodes, packets RX / TX / RX bad, noise floor; diagnostics: packets RX duplicate, packets relayed, relays canceled, packets TX dropped, free / total memory, firmware, hardware, role, radio, ID, long name, short name, external power.
+
+Ids come from hardware, never from names: the bridge uses its chip id (`mbb_87ae18_…`, `sensor.meshtastic_bridge_87ae18_…`) and the node its node number (`mbn_3f7d8903_…`, `sensor.meshtastic_3f7d8903_…`). Renaming the node in the Meshtastic app only changes the *Long name* / *Short name* entities; device name, entity ids, history, dashboards and automations stay the same. If the bridge is pointed at another node, the old node's device is removed.
+
+Node values come from the telemetry the node sends to its client (every minute) and its local stats (every 15 min), so they update while a client (app, Home Assistant…) is connected. Entities go *unavailable* in HA when the bridge is offline.
+
+### Customizing the entities (`ha_mqtt_discovery.json`)
+
+In **Settings → MQTT → Home Assistant discovery**:
+
+1. **Download current** gives the file in use (the firmware default the first time).
+2. Edit it: rename entities, change icons and units, move them to *Diagnostic*, remove the ones you don't want, or add entities for fields that have none (e.g. `node_long_name`).
+3. **Upload and publish** validates it, stores it on the ESP32 (kept across firmware updates) and republishes; entities removed from the file are deleted in HA.
+4. **Restore default** goes back to the firmware's entities.
+
+```json
+{"key": "node_battery", "name": "Node battery", "device_class": "battery",
+ "unit_of_measurement": "%", "state_class": "measurement"}
+```
+
+| Key | Meaning |
+|---|---|
+| `key` | Unique id suffix (`a-z`, `0-9`, `_`). Keep it to keep the HA entity and its history |
+| `name` | Entity name in HA |
+| `field` | Field it reads (defaults to `key`). The list is at `/api/mqtt/fields`; `node_*` fields put the entity on the node's device |
+| `component` | `sensor` (default) or `binary_sensor` |
+| `format` | `duration`: seconds shown as `1d 02h 03m 04s` |
+| `diagnostic` | `true` lists it under *Diagnostic* |
+
+Any other key (`unit_of_measurement`, `device_class`, `state_class`, `icon`, `value_template`…) is passed to Home Assistant unchanged. Entries with an unknown field or an invalid key are ignored and counted on the page. The buttons, the Bluetooth link switch and the node position are part of the firmware and not in the file. The file only changes how existing data is presented; reading new data from the node needs a firmware update.
+
+### HTTP API
+
+`GET /api/status` returns everything the bridge knows, including every value read from the node (identity, radio, battery, channel use, uptime and the local stats: nodes, packet counters, noise floor, free memory). Fields that have not been received yet are `null`.
 
 ## Security notes
 
