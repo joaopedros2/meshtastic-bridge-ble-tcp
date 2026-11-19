@@ -1,5 +1,7 @@
 # Meshtastic Bridge BLE-TCP
 
+**English** · [Português (PT)](README.pt-PT.md)
+
 ESP32 firmware that makes a **Bluetooth-only Meshtastic node** reachable over your network.
 
 The ESP32 sits next to the node, connects to it over Bluetooth LE, and exposes the standard Meshtastic **TCP API on port 4403**. The Meshtastic apps, Home Assistant or any other client can then connect to the node by IP — at home or remotely via VPN — with no PC left running.
@@ -46,9 +48,9 @@ pio device monitor
 
 The default environment targets `esp32dev`. For other chips, change `board` in `platformio.ini` (e.g. `esp32-s3-devkitc-1`, `esp32-c3-devkitm-1`) and add `-DARDUINO_USB_CDC_ON_BOOT=1` for boards with native USB.
 
-> **Windows:** keep the project in a path without accents or spaces (e.g. `C:\projects\`), otherwise the linker fails.
+> **Windows:** keep the project in a path without accents or spaces (e.g. `C:\dev\`), otherwise the linker fails.
 
-Later updates can be done from **Settings → Firmware** with `.pio/build/esp32dev/firmware.bin`.
+Later updates can be done from **Settings → Firmware** with `.pio/build/esp32dev/firmware.bin` or the `.bin` from the [releases](https://github.com/joaopedros2/meshtastic-bridge-ble-tcp/releases).
 
 ## First-time setup
 
@@ -94,7 +96,7 @@ In **Settings → MQTT → Home Assistant discovery**:
 4. **Restore default** goes back to the firmware's entities.
 
 ```json
-{"key": "node_battery", "name": "Node battery", "device_class": "battery",
+{"key": "node_battery", "name": "Battery", "device_class": "battery",
  "unit_of_measurement": "%", "state_class": "measurement"}
 ```
 
