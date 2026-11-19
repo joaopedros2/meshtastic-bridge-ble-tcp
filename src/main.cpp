@@ -188,7 +188,7 @@ static int lastBleError = 0;
 static const char* lastBleStage = "";
 static const char* lastBleErrorKey = "";  // short code the web page translates, e.g. "pin_rejected"
 static int bleRssi = 0;
-static String bleName;  // the node's advertised Bluetooth name, e.g. "JSS8_8903"
+static String bleName;  // the node's advertised Bluetooth name, e.g. "Meshtastic_1d7a"
 static uint32_t lastRxMs = 0;
 static uint32_t bleConnectedAt = 0;  // millis() when the current BLE link became ready
 static uint32_t bleConnectCount = 0;  // successful connections since boot (reconnects = count - 1)
@@ -197,14 +197,14 @@ static volatile int disconnectReason = -1;  // set by BLE task, -1 = nothing pen
 
 static bool apActive = false;
 static String apSsid;  // unique per chip, so several bridges don't collide
-static String chipId;  // last 3 bytes of the chip MAC, e.g. "87ae18"
-static String chipSuffix;  // last 2 bytes, e.g. "AE18" - tells several bridges apart
+static String chipId;  // last 3 bytes of the chip MAC, e.g. "5b3c91"
+static String chipSuffix;  // last 2 bytes, e.g. "3C91" - tells several bridges apart
 
 // Default name carries the chip suffix, so several bridges never share a hostname / HA device name
 static String defaultHostname() {
   String sfx = chipSuffix;
   sfx.toLowerCase();
-  return String(PROJECT_SLUG) + "-" + sfx;  // e.g. meshtastic-bridge-ble-tcp-ae18
+  return String(PROJECT_SLUG) + "-" + sfx;  // e.g. meshtastic-bridge-ble-tcp-3c91
 }
 
 // Name shown in Home Assistant and to the apps (mDNS)
@@ -1847,7 +1847,7 @@ void setup() {
   chipSuffix = suffix;
   // Old single default name -> per-chip default (a name chosen by the user is kept)
   if (cfg.hostname.isEmpty() || cfg.hostname == PROJECT_SLUG) cfg.hostname = defaultHostname();
-  apSsid = String(PROJECT_SLUG) + "-" + suffix;  // e.g. meshtastic-bridge-ble-tcp-AE18 (30 chars, SSID max 32)
+  apSsid = String(PROJECT_SLUG) + "-" + suffix;  // e.g. meshtastic-bridge-ble-tcp-3C91 (30 chars, SSID max 32)
   logf("[BOOT] %s v%s", PROJECT_NAME, FW_VERSION);
 
   WiFi.setHostname(cfg.hostname.c_str());  // must precede mode()/begin()

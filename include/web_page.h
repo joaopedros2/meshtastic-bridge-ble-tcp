@@ -118,7 +118,7 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:8px 0 24px}
 <div id="bleFields">
 <div class="btns"><button id="bleScanBtn" class="sec" onclick="bleScan()" data-i18n="scan_nodes"></button></div>
 <div id="bleList" class="list"></div>
-<label data-i18n="mac_address"></label><input id="bleMac" placeholder="c2:23:3f:7d:89:03">
+<label data-i18n="mac_address"></label><input id="bleMac" placeholder="d4:e5:f6:4c:1d:7a">
 <input id="bleType" type="hidden" value="1">
 <label data-i18n="ble_pin"></label><input id="blePin" inputmode="numeric" placeholder="123456">
 <div class="btns"><button onclick="bleSave()" data-i18n="save_connect"></button></div>
