@@ -28,16 +28,20 @@ Built for nRF52 nodes such as the SenseCAP Solar Node, RAK4631, T-Echo or T1000-
 
 Any ESP32 with **Wi-Fi + Bluetooth LE** and **at least 4 MB flash**:
 
-| Board | `board` in `platformio.ini` | Status |
-|---|---|---|
-| ESP32 DevKit (ESP32-WROOM-32) | `esp32dev` | ✅ Tested — default environment, release `.bin` |
-| Seeed Studio XIAO ESP32-C3 | `seeed_xiao_esp32c3` | 🟡 Should work — ready-made `xiao_esp32c3` environment, not tested yet |
-| Other ESP32, ESP32-S3, ESP32-C3, ESP32-C6 boards | see below | 🟡 Should work — not tested |
-| ESP32-S2 (no Bluetooth), ESP32-H2 (no Wi-Fi) | — | ❌ Not possible |
+| Board | Environment | Release file | Status |
+|---|---|---|---|
+| ESP32 DevKit (ESP32-WROOM-32) | `esp32dev` | `…-esp32.bin` | ✅ Tested (default) |
+| ESP32-S3 DevKit | `esp32s3` | `…-esp32s3.bin` | 🟡 Builds — not tested yet |
+| ESP32-C3 DevKit | `esp32c3` | `…-esp32c3.bin` | 🟡 Builds — not tested yet |
+| ESP32-C6 DevKit | `esp32c6` | `…-esp32c6.bin` | 🟡 Builds — not tested yet |
+| Seeed Studio XIAO ESP32-C3 | `xiao_esp32c3` | `…-xiao-esp32c3.bin` | 🟡 Builds — not tested yet |
+| Seeed Studio XIAO ESP32-S3 | `xiao_esp32s3` | `…-xiao-esp32s3.bin` | 🟡 Builds — not tested yet |
+| Other ESP32 boards | see below | — | 🟡 Build it yourself |
+| ESP32-S2 (no Bluetooth), ESP32-H2 (no Wi-Fi) | — | — | ❌ Not possible |
 
 Bluetooth range is the main limit: aim for a BLE RSSI better than about −85 dBm. A board with an external antenna (e.g. XIAO ESP32-C3 or XIAO ESP32-S3, with the antenna connected) helps both Bluetooth and Wi-Fi.
 
-The firmware in the [releases](https://github.com/joaopedros2/meshtastic-bridge-ble-tcp/releases) is built for `esp32dev` (classic ESP32) only. For any other board, build it yourself as below.
+Each [release](https://github.com/joaopedros2/meshtastic-bridge-ble-tcp/releases) has one `.bin` per board in the table, built automatically by GitHub Actions. Pick the file for your chip: a `.bin` for another chip does not run. For any other board, build it yourself as below.
 
 ### Using another board
 
@@ -69,11 +73,11 @@ pio run -t upload
 pio device monitor
 ```
 
-This builds the default `esp32dev` environment. For the XIAO ESP32-C3 use `pio run -e xiao_esp32c3 -t upload`; for other boards see [Using another board](#using-another-board).
+This builds the default `esp32dev` environment. For another board in the table use its environment, e.g. `pio run -e xiao_esp32c3 -t upload`; for other boards see [Using another board](#using-another-board).
 
 > **Windows:** keep the project in a path without accents or spaces (e.g. `C:\dev\`), otherwise the linker fails.
 
-Later updates can be done from **Settings → Firmware** with `.pio/build/esp32dev/firmware.bin` or the `.bin` from the [releases](https://github.com/joaopedros2/meshtastic-bridge-ble-tcp/releases).
+Later updates can be done from **Settings → Firmware** with `.pio/build/<environment>/firmware.bin` or your board's `.bin` from the [releases](https://github.com/joaopedros2/meshtastic-bridge-ble-tcp/releases).
 
 ## First-time setup
 

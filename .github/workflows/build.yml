@@ -1,0 +1,67 @@
+# Builds the firmware for every board; on a published release, attaches one .bin per board
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write  # needed to upload release assets
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { env: esp32dev, board: esp32 }
+          - { env: esp32s3, board: esp32s3 }
+          - { env: esp32c3, board: esp32c3 }
+          - { env: esp32c6, board: esp32c6 }
+          - { env: xiao_esp32c3, board: xiao-esp32c3 }
+          - { env: xiao_esp32s3, board: xiao-esp32s3 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: pio-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
+
+      - run: pip install platformio
+
+      - run: pio run -e ${{ matrix.env }}
+
+      - name: Name the binary after version and board
+        id: bin
+        run: |
+          ver=$(grep -oP 'FW_VERSION = "\K[^"]+' src/main.cpp)
+          if [ "${{ github.event_name }}" = "release" ] && [ "${{ github.event.release.tag_name }}" != "v$ver" ]; then
+            echo "::error::Release tag ${{ github.event.release.tag_name }} does not match FW_VERSION $ver"; exit 1
+          fi
+          name="meshtastic-bridge-ble-tcp-v${ver}-${{ matrix.board }}.bin"
+          cp ".pio/build/${{ matrix.env }}/firmware.bin" "$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.bin.outputs.name }}
+          path: ${{ steps.bin.outputs.name }}
+
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "${{ steps.bin.outputs.name }}" --clobber
