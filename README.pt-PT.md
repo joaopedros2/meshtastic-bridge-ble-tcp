@@ -28,16 +28,20 @@ Feito para nós nRF52 sem Wi-Fi, como o SenseCAP Solar Node, RAK4631, T-Echo ou 
 
 Qualquer ESP32 com **Wi-Fi + Bluetooth LE** e **pelo menos 4 MB de flash**:
 
-| Placa | `board` no `platformio.ini` | Estado |
-|---|---|---|
-| ESP32 DevKit (ESP32-WROOM-32) | `esp32dev` | ✅ Testada — ambiente predefinido, `.bin` dos releases |
-| Seeed Studio XIAO ESP32-C3 | `seeed_xiao_esp32c3` | 🟡 Deve funcionar — ambiente `xiao_esp32c3` já preparado, ainda não testada |
-| Outras placas ESP32, ESP32-S3, ESP32-C3, ESP32-C6 | ver abaixo | 🟡 Devem funcionar — não testadas |
-| ESP32-S2 (sem Bluetooth), ESP32-H2 (sem Wi-Fi) | — | ❌ Não é possível |
+| Placa | Ambiente | Ficheiro do release | Estado |
+|---|---|---|---|
+| ESP32 DevKit (ESP32-WROOM-32) | `esp32dev` | `…-esp32.bin` | ✅ Testada (predefinido) |
+| ESP32-S3 DevKit | `esp32s3` | `…-esp32s3.bin` | 🟡 Compila — ainda não testada |
+| ESP32-C3 DevKit | `esp32c3` | `…-esp32c3.bin` | 🟡 Compila — ainda não testada |
+| ESP32-C6 DevKit | `esp32c6` | `…-esp32c6.bin` | 🟡 Compila — ainda não testada |
+| Seeed Studio XIAO ESP32-C3 | `xiao_esp32c3` | `…-xiao-esp32c3.bin` | 🟡 Compila — ainda não testada |
+| Seeed Studio XIAO ESP32-S3 | `xiao_esp32s3` | `…-xiao-esp32s3.bin` | 🟡 Compila — ainda não testada |
+| Outras placas ESP32 | ver abaixo | — | 🟡 Compila-o tu |
+| ESP32-S2 (sem Bluetooth), ESP32-H2 (sem Wi-Fi) | — | — | ❌ Não é possível |
 
 O alcance do Bluetooth é o principal limite: procura um RSSI BLE melhor que cerca de −85 dBm. Uma placa com antena externa (por exemplo, XIAO ESP32-C3 ou XIAO ESP32-S3, com a antena ligada) ajuda o Bluetooth e o Wi-Fi.
 
-O firmware dos [releases](https://github.com/joaopedros2/meshtastic-bridge-ble-tcp/releases) é compilado só para `esp32dev` (ESP32 clássico). Para qualquer outra placa, compila-o tu, como explicado abaixo.
+Cada [release](https://github.com/joaopedros2/meshtastic-bridge-ble-tcp/releases) traz um `.bin` por placa da tabela, compilado automaticamente pelo GitHub Actions. Escolhe o ficheiro do teu chip: um `.bin` de outro chip não arranca. Para qualquer outra placa, compila-o tu, como explicado abaixo.
 
 ### Usar outra placa
 
@@ -69,11 +73,11 @@ pio run -t upload
 pio device monitor
 ```
 
-Isto compila o ambiente predefinido `esp32dev`. Para o XIAO ESP32-C3 usa `pio run -e xiao_esp32c3 -t upload`; para outras placas vê [Usar outra placa](#usar-outra-placa).
+Isto compila o ambiente predefinido `esp32dev`. Para outra placa da tabela usa o ambiente dela, por exemplo `pio run -e xiao_esp32c3 -t upload`; para outras placas vê [Usar outra placa](#usar-outra-placa).
 
 > **Windows:** guarda o projeto num caminho sem acentos nem espaços (por exemplo, `C:\dev\`), senão o linker falha.
 
-As atualizações seguintes podem ser feitas em **Definições → Firmware**, com o `.pio/build/esp32dev/firmware.bin` ou o `.bin` dos [releases](https://github.com/joaopedros2/meshtastic-bridge-ble-tcp/releases).
+As atualizações seguintes podem ser feitas em **Definições → Firmware**, com o `.pio/build/<ambiente>/firmware.bin` ou o `.bin` da tua placa nos [releases](https://github.com/joaopedros2/meshtastic-bridge-ble-tcp/releases).
 
 ## Primeira configuração
 
