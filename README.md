@@ -14,12 +14,12 @@ Built for nRF52 nodes such as the SenseCAP Solar Node, RAK4631, T-Echo or T1000-
 
 - **BLE → TCP bridge** on port 4403, compatible with the Meshtastic apps (Android, iOS, Windows), the Python CLI and Home Assistant
 - **Up to 4 clients at once** (e.g. Home Assistant and the app); live mesh traffic goes to all, config requests are served one at a time
-- **Web page** (EN / PT-PT, desktop and mobile): status, logs, Bluetooth node scan, Wi-Fi setup, network name, page login
+- **Web page** (EN / PT-PT, desktop and mobile): status, logs, Bluetooth node scan, Wi-Fi setup, hostname, page login
 - **First-time setup access point** — no credentials or node address are built into the firmware
-- **MQTT with Home Assistant discovery**: bridge and node diagnostics (signal, link state, battery, channel utilization, nodes online, packet counters, noise floor…) plus Restart, Bluetooth reconnect and Bluetooth link controls; entities customizable by uploading `ha_mqtt_discovery.json`
+- **MQTT with Home Assistant discovery**: bridge and node diagnostics (signal, link state, battery, channel utilization, nodes online, packet counters, noise floor…) plus Restart, Bluetooth reconnect and Bluetooth link controls
 - **OTA updates** from the browser
 - mDNS (`meshtastic-bridge-ble-tcp-xxxx.local`) so apps can discover the bridge
-- Node card on the status page (battery, name, firmware, radio)
+- Node card on the status page (battery, name, firmware, uptime) and a **Restart** button
 - Automatic BLE reconnect with backoff and dead-link detection
 
 ![Settings](docs/settings.png)
@@ -28,12 +28,35 @@ Built for nRF52 nodes such as the SenseCAP Solar Node, RAK4631, T-Echo or T1000-
 
 Any ESP32 with **Wi-Fi + Bluetooth LE** and **at least 4 MB flash**:
 
-| Chip | Supported |
-|---|---|
-| ESP32, ESP32-S3, ESP32-C3, ESP32-C6 | ✅ |
-| ESP32-S2 (no Bluetooth), ESP32-H2 (no Wi-Fi) | ❌ |
+| Board | `board` in `platformio.ini` | Status |
+|---|---|---|
+| ESP32 DevKit (ESP32-WROOM-32) | `esp32dev` | ✅ Tested — default environment, release `.bin` |
+| Seeed Studio XIAO ESP32-C3 | `seeed_xiao_esp32c3` | 🟡 Should work — ready-made `xiao_esp32c3` environment, not tested yet |
+| Other ESP32, ESP32-S3, ESP32-C3, ESP32-C6 boards | see below | 🟡 Should work — not tested |
+| ESP32-S2 (no Bluetooth), ESP32-H2 (no Wi-Fi) | — | ❌ Not possible |
 
-Bluetooth range is the main limit: aim for a BLE RSSI better than about −85 dBm. A board with an external antenna (e.g. XIAO ESP32-S3) helps.
+Bluetooth range is the main limit: aim for a BLE RSSI better than about −85 dBm. A board with an external antenna (e.g. XIAO ESP32-C3 or XIAO ESP32-S3, with the antenna connected) helps both Bluetooth and Wi-Fi.
+
+The firmware in the [releases](https://github.com/joaopedros2/meshtastic-bridge-ble-tcp/releases) is built for `esp32dev` (classic ESP32) only. For any other board, build it yourself as below.
+
+### Using another board
+
+1. Find your board's id in the [PlatformIO board list](https://docs.platformio.org/en/latest/boards/index.html#espressif-32) (e.g. `esp32-s3-devkitc-1`, `esp32-c6-devkitc-1`).
+2. Add an environment to `platformio.ini` that reuses the default one:
+
+   ```ini
+   [env:my_board]
+   extends = env:esp32dev
+   board = esp32-s3-devkitc-1
+   build_flags =
+       -DARDUINO_USB_MODE=1
+       -DARDUINO_USB_CDC_ON_BOOT=1  ; only for boards with native USB (S3, C3, C6), so logs show on that port
+   ```
+
+3. Build and flash it: `pio run -e my_board -t upload` (or pick `env:my_board` in the VS Code status bar).
+4. The first flash of a new board must be over USB; if it isn't detected, hold **BOOT** while plugging it in. Later updates can go through **Settings → Firmware** with `.pio/build/my_board/firmware.bin`.
+
+The board needs at least 4 MB of flash (two app slots for web updates). If it works on a board not listed here, please open an issue so it can be added to the table.
 
 ## Build and flash
 
@@ -46,7 +69,7 @@ pio run -t upload
 pio device monitor
 ```
 
-The default environment targets `esp32dev`. For other chips, change `board` in `platformio.ini` (e.g. `esp32-s3-devkitc-1`, `esp32-c3-devkitm-1`) and add `-DARDUINO_USB_CDC_ON_BOOT=1` for boards with native USB.
+This builds the default `esp32dev` environment. For the XIAO ESP32-C3 use `pio run -e xiao_esp32c3 -t upload`; for other boards see [Using another board](#using-another-board).
 
 > **Windows:** keep the project in a path without accents or spaces (e.g. `C:\dev\`), otherwise the linker fails.
 
@@ -65,7 +88,7 @@ Later updates can be done from **Settings → Firmware** with `.pio/build/esp32d
 
 Use one bridge per node. Each one gets its own name from the chip id (`XXXX`, the same as its setup network):
 `meshtastic-bridge-ble-tcp-xxxx` on the network and `.local`, and **Meshtastic Bridge BLE-TCP XXXX** in Home Assistant.
-To use a name of your own (e.g. `bridge-solar-roof`), set it in **Settings → Device** — ideally before enabling MQTT, so the HA entity ids are created with it. MQTT topics and discovery ids always include the chip id, so bridges never clash.
+To use a name of your own (e.g. `bridge-solar-roof`), set it in **Settings → Wi-Fi** (Hostname) — ideally before enabling MQTT, so the HA entity ids are created with it. MQTT topics and discovery ids always include the chip id, so bridges never clash.
 
 ## Connecting
 
@@ -80,36 +103,15 @@ Enable it in **Settings → MQTT** (broker, port, user, password). Topics live u
 Two devices appear in Home Assistant:
 
 - **The bridge** (`Meshtastic Bridge BLE-TCP XXXX`): Bluetooth connected, Bluetooth state, Bluetooth RSSI, Bluetooth connected for, Bluetooth reconnects, TCP clients; controls: Restart, Bluetooth reconnect (buttons), Bluetooth link (switch); diagnostics: status, node Bluetooth name, Wi-Fi SSID, Wi-Fi RSSI, IP, uptime, free memory, DNS address, Wi-Fi MAC address, internal temperature.
-- **The node** (`Meshtastic Node 1D7A`, from the last 4 digits of its node id), linked to the bridge (model, firmware and node id as serial number): position (device tracker, when the node shares one), battery, voltage, channel utilization, airtime TX, uptime, online / known nodes, packets RX / TX / RX bad, noise floor; diagnostics: packets RX duplicate, packets relayed, relays canceled, packets TX dropped, free / total memory, firmware, hardware, role, radio, ID, long name, short name, external power.
+- **The node** (`Meshtastic Node 1D7A`, from the last 4 digits of its node id), linked to the bridge (model, firmware and node id as serial number): Restart button, position (device tracker, when the node shares one), battery, voltage, channel utilization, airtime TX, uptime, online / known nodes, packets RX / TX / RX bad, noise floor; diagnostics: packets RX duplicate, packets relayed, relays canceled, packets TX dropped, free / total memory, firmware, hardware, role, radio, ID, long name, short name, external power.
 
 Ids come from hardware, never from names: the bridge uses its chip id (`mbb_5b3c91_…`, `sensor.meshtastic_bridge_5b3c91_…`) and the node its node number (`mbn_f64c1d7a_…`, `sensor.meshtastic_f64c1d7a_…`). Renaming the node in the Meshtastic app only changes the *Long name* / *Short name* entities; device name, entity ids, history, dashboards and automations stay the same. If the bridge is pointed at another node, the old node's device is removed.
 
 Node values come from the telemetry the node sends to its client (every minute) and its local stats (every 15 min), so they update while a client (app, Home Assistant…) is connected. Entities go *unavailable* in HA when the bridge is offline.
 
-### Customizing the entities (`ha_mqtt_discovery.json`)
+### Changing the entities
 
-In **Settings → MQTT → Home Assistant discovery**:
-
-1. **Download current** gives the file in use (the firmware default the first time).
-2. Edit it: rename entities, change icons and units, move them to *Diagnostic*, remove the ones you don't want, or add entities for fields that have none (e.g. `node_long_name`).
-3. **Upload and publish** validates it, stores it on the ESP32 (kept across firmware updates) and republishes; entities removed from the file are deleted in HA.
-4. **Restore default** goes back to the firmware's entities.
-
-```json
-{"key": "node_battery", "name": "Battery", "device_class": "battery",
- "unit_of_measurement": "%", "state_class": "measurement"}
-```
-
-| Key | Meaning |
-|---|---|
-| `key` | Unique id suffix (`a-z`, `0-9`, `_`). Keep it to keep the HA entity and its history |
-| `name` | Entity name in HA |
-| `field` | Field it reads (defaults to `key`). The list is at `/api/mqtt/fields`; `node_*` fields put the entity on the node's device |
-| `component` | `sensor` (default) or `binary_sensor` |
-| `format` | `duration`: seconds shown as `1d 02h 03m 04s` |
-| `diagnostic` | `true` lists it under *Diagnostic* |
-
-Any other key (`unit_of_measurement`, `device_class`, `state_class`, `icon`, `value_template`…) is passed to Home Assistant unchanged. Entries with an unknown field or an invalid key are ignored and counted on the page. The buttons, the Bluetooth link switch and the node position are part of the firmware and not in the file. The file only changes how existing data is presented; reading new data from the node needs a firmware update.
+The entities are defined in `include/ha_entities.h` (name, unit, icon, category). To change them, edit that file and update the firmware; keep each `key` so the HA entity keeps its history.
 
 ### HTTP API
 

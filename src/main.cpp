@@ -12,14 +12,14 @@
 #include <Update.h>
 #include <NimBLEDevice.h>
 #include <PubSubClient.h>
-#include <LittleFS.h>
-#include <ArduinoJson.h>
-#include <algorithm>
 #include <vector>
 #include <stdarg.h>
+#include <errno.h>
+#include <esp_timer.h>
+#include <lwip/sockets.h>
 #include "web_page.h"
 #include "node_names.h"
-#include "discovery_default.h"
+#include "ha_entities.h"
 
 // No WiFi network or BLE node is built in: on first boot the bridge opens a
 // setup access point and everything is configured on the web page (stored in NVS).
@@ -30,9 +30,8 @@ static const char* PROJECT_NAME = "Meshtastic Bridge BLE-TCP";
 static const char* PROJECT_SLUG = "meshtastic-bridge-ble-tcp";  // hostname, AP, MQTT base topic
 static const char* LEGACY_SLUG = "meshtastic-ble-bridge";       // pre-1.3.2 default, migrated on boot
 
-static const char* FW_VERSION = "1.3.4";
-static const char* AP_PASSWORD = "meshtastic";            // min 8 chars (WPA2)
-// Shown in the router/DHCP list and used for mDNS (<name>.local); editable on the web page
+static const char* FW_VERSION = "1.3.5";
+static const char* AP_PASSWORD = "meshtastic";  // setup network, min 8 chars (WPA2)
 
 // Meshtastic GATT UUIDs
 static const NimBLEUUID SERVICE_UUID("6ba1b218-15a8-461f-9fa8-5dcae273eafd");
@@ -53,6 +52,7 @@ static constexpr uint8_t MAX_WRITE_FAILURES = 3;
 static constexpr size_t MAX_CLIENTS = 4;
 static constexpr uint32_t CONFIG_TIMEOUT_MS = 30000;  // max time one client may own the config stream
 static constexpr uint32_t KEEPALIVE_MS = 15000;       // idle link check (no clients connected)
+static constexpr uint32_t SEND_STALL_MS = 500;        // a client that can't take data for this long is dropped
 
 // ---------- settings (NVS) ----------
 
@@ -117,6 +117,9 @@ static void saveSettings() {
   prefs.end();
 }
 
+// Seconds since boot from the 64-bit timer: millis() wraps after 49.7 days
+static uint32_t uptimeSec() { return uint32_t(esp_timer_get_time() / 1000000ULL); }
+
 // ---------- logging (serial + ring buffer for the web page) ----------
 
 static constexpr size_t LOG_LINES = 60;
@@ -130,7 +133,7 @@ static void logf(const char* fmt, ...) {
   vsnprintf(msg, sizeof(msg), fmt, args);
   va_end(args);
 
-  uint32_t s = millis() / 1000;
+  uint32_t s = uptimeSec();
   char line[220];
   snprintf(line, sizeof(line), "%02lu:%02lu:%02lu %s", s / 3600, (s / 60) % 60, s % 60, msg);
   Serial.println(line);
@@ -194,6 +197,7 @@ static uint32_t bleConnectedAt = 0;  // millis() when the current BLE link becam
 static uint32_t bleConnectCount = 0;  // successful connections since boot (reconnects = count - 1)
 static uint8_t writeFailures = 0;
 static volatile int disconnectReason = -1;  // set by BLE task, -1 = nothing pending
+static volatile int authResult = -1;        // set by BLE task: 1 = encrypted, 0 = failed, -1 = nothing pending
 
 static bool apActive = false;
 static String apSsid;  // unique per chip, so several bridges don't collide
@@ -231,7 +235,7 @@ class BridgeClientCallbacks : public NimBLEClientCallbacks {
     NimBLEDevice::injectConfirmPasskey(connInfo, true);
   }
   void onAuthenticationComplete(NimBLEConnInfo& connInfo) override {
-    logf("[BLE] auth %s", connInfo.isEncrypted() ? "ok" : "FAILED");
+    authResult = connInfo.isEncrypted() ? 1 : 0;  // logged from loop()
   }
 };
 static BridgeClientCallbacks clientCallbacks;
@@ -372,6 +376,10 @@ static void manageBle() {
   if (disconnectReason >= 0) {
     logf("[BLE] disconnected, reason=%d (%s)", disconnectReason, disconnectText(disconnectReason));
     disconnectReason = -1;
+  }
+  if (authResult >= 0) {
+    logf("[BLE] auth %s", authResult ? "ok" : "FAILED");
+    authResult = -1;
   }
 
   if (!cfg.bleEnabled) return;
@@ -627,15 +635,16 @@ static void parseConfig(const uint8_t* p, size_t len) {
   PbField f, g;
   while (pbNext(p, len, i, f)) {
     if (f.num == 6 && f.data) {  // LoRaConfig
+      // proto3 omits zero values: start from them (use_preset false, LONG_FAST, UNSET)
+      node.usePreset = false;
+      node.preset = 0;
+      node.region = 0;
       j = 0;
       while (pbNext(f.data, f.len, j, g)) {
         if (g.num == 1) node.usePreset = g.value != 0;
         else if (g.num == 2) node.preset = int(g.value);
         else if (g.num == 7) node.region = int(g.value);
       }
-      // proto3 omits zero values: absent fields mean LONG_FAST / UNSET
-      if (node.preset < 0) node.preset = 0;
-      if (node.region < 0) node.region = 0;
     } else if (f.num == 1 && f.data) {  // DeviceConfig
       node.role = 0;  // CLIENT when omitted
       j = 0;
@@ -706,10 +715,38 @@ static size_t activeClientCount() {
   return n;
 }
 
-static void sendFramed(WiFiClient& sock, const uint8_t* data, size_t len) {
-  uint8_t header[4] = {START1, START2, uint8_t(len >> 8), uint8_t(len & 0xFF)};
-  sock.write(header, sizeof(header));
-  sock.write(data, len);
+// Non-blocking send with a short grace period: a stalled client (e.g. a dropped VPN)
+// must not freeze the bridge. WiFiClient::write() can block for ~10 s.
+static bool sendAll(int fd, const uint8_t* d, size_t n) {
+  uint32_t t0 = millis();
+  while (n) {
+    int w = lwip_send(fd, d, n, MSG_DONTWAIT);
+    if (w > 0) {
+      d += w;
+      n -= size_t(w);
+    } else if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+      return false;
+    } else if (millis() - t0 > SEND_STALL_MS) {
+      return false;
+    } else {
+      delay(5);
+    }
+  }
+  return true;
+}
+
+static void closeSession(size_t i, const char* reason);
+
+// Header and payload in one write -> one TCP segment; drops the client if it stalls
+static void sendFramed(size_t idx, const uint8_t* data, size_t len) {
+  uint8_t frame[4 + MAX_PAYLOAD + 4];
+  if (len > sizeof(frame) - 4) return;
+  frame[0] = START1;
+  frame[1] = START2;
+  frame[2] = uint8_t(len >> 8);
+  frame[3] = uint8_t(len & 0xFF);
+  memcpy(frame + 4, data, len);
+  if (!sendAll(sessions[idx].sock.fd(), frame, len + 4)) closeSession(idx, "not reading, dropped");
 }
 
 static void writeToRadio(const uint8_t* data, size_t len) {
@@ -721,6 +758,54 @@ static void writeToRadio(const uint8_t* data, size_t len) {
     logf("[BLE] %u write failures, reconnecting", writeFailures);
     bleClient->disconnect();
   }
+}
+
+// ---------- node administration (AdminMessage to our own node, ADMIN_APP) ----------
+// From a local client (BLE) the node accepts admin without a session key. Field numbers: meshtastic/admin.proto
+static const uint32_t ADMIN_REBOOT_SECONDS = 97;  // int32: reboot after N seconds
+
+static void pbPutVarint(std::vector<uint8_t>& b, uint64_t v) {
+  do {
+    uint8_t c = v & 0x7F;
+    v >>= 7;
+    b.push_back(v ? c | 0x80 : c);
+  } while (v);
+}
+static void pbPutTag(std::vector<uint8_t>& b, uint32_t field, uint8_t wire) { pbPutVarint(b, (uint64_t(field) << 3) | wire); }
+static void pbPutBytes(std::vector<uint8_t>& b, uint32_t field, const std::vector<uint8_t>& v) {
+  pbPutTag(b, field, 2);
+  pbPutVarint(b, v.size());
+  b.insert(b.end(), v.begin(), v.end());
+}
+static void pbPutFixed32(std::vector<uint8_t>& b, uint32_t field, uint32_t v) {
+  pbPutTag(b, field, 5);
+  for (int i = 0; i < 4; i++) b.push_back(uint8_t(v >> (8 * i)));
+}
+
+// ToRadio{packet: MeshPacket{to: node, decoded: Data{portnum: ADMIN_APP, payload: AdminMessage{field: value}}}}
+static bool sendNodeAdmin(uint32_t field, uint32_t value, const char* what) {
+  if (!bleReady || !node.num) {
+    logf("[NODE] %s: node not connected", what);
+    return false;
+  }
+  std::vector<uint8_t> admin, data, packet, msg;
+  pbPutTag(admin, field, 0);
+  pbPutVarint(admin, value);
+  pbPutTag(data, 1, 0);
+  pbPutVarint(data, 6);  // PortNum ADMIN_APP
+  pbPutBytes(data, 2, admin);
+  pbPutFixed32(packet, 2, node.num);      // to: our own node
+  pbPutBytes(packet, 4, data);            // decoded
+  pbPutFixed32(packet, 6, esp_random());  // packet id
+  pbPutBytes(msg, 1, packet);             // ToRadio.packet
+  writeToRadio(msg.data(), msg.size());
+  logf("[NODE] %s sent to !%08lx", what, (unsigned long)node.num);
+  return true;
+}
+
+static bool rebootNode(const char* source) {
+  logf("[NODE] restart requested (%s)", source);
+  return sendNodeAdmin(ADMIN_REBOOT_SECONDS, 5, "restart");
 }
 
 static void startNextPendingConfig() {
@@ -771,12 +856,12 @@ static void dispatchFromRadio(const uint8_t* data, size_t len) {
   inspectFromRadio(data, len);  // keep node info (name, battery…) up to date
   uint32_t field = firstField(data, len, pb::FROM_RADIO_ID);
   if (configOwner != CONFIG_OWNER_NONE && isConfigField(field)) {
-    if (configOwner >= 0 && sessions[configOwner].active) sendFramed(sessions[configOwner].sock, data, len);
+    if (configOwner >= 0 && sessions[configOwner].active) sendFramed(size_t(configOwner), data, len);
     if (field == pb::FROM_RADIO_CONFIG_COMPLETE) endConfigSession();
     return;
   }
-  for (auto& s : sessions)
-    if (s.active) sendFramed(s.sock, data, len);
+  for (size_t i = 0; i < MAX_CLIENTS; i++)
+    if (sessions[i].active) sendFramed(i, data, len);
 }
 
 // Handle one complete ToRadio frame from a client
@@ -831,8 +916,31 @@ static void pumpBleToTcp() {
   if (!bleClient->isConnected()) bleReady = false;
 }
 
-// Byte-wise frame parser for data coming from each client
+// Frame parser: one byte from a client; complete frames go to the node
+static void parseClientByte(size_t idx, uint8_t b) {
+  FrameParser& p = sessions[idx].parser;
+  switch (p.state) {
+    case 0: if (b == START1) p.state = 1; break;
+    case 1: p.state = (b == START2) ? 2 : 0; break;
+    case 2: p.expected = size_t(b) << 8; p.state = 3; break;
+    case 3:
+      p.expected |= b;
+      p.received = 0;
+      p.state = (p.expected > 0 && p.expected <= MAX_PAYLOAD) ? 4 : 0;  // drop bad lengths
+      break;
+    case 4:
+      p.buf[p.received++] = b;
+      if (p.received == p.expected) {
+        handleToRadio(idx, p.buf, p.expected);
+        p.state = 0;
+      }
+      break;
+  }
+}
+
+// Read each client in blocks (not byte by byte)
 static void pumpTcpToBle() {
+  uint8_t chunk[256];
   for (size_t idx = 0; idx < MAX_CLIENTS; idx++) {
     TcpSession& s = sessions[idx];
     if (!s.active) continue;
@@ -840,27 +948,9 @@ static void pumpTcpToBle() {
       closeSession(idx, "disconnected");
       continue;
     }
-    FrameParser& p = s.parser;
-    while (s.active && s.sock.available()) {
-      uint8_t b = s.sock.read();
-      switch (p.state) {
-        case 0: if (b == START1) p.state = 1; break;
-        case 1: p.state = (b == START2) ? 2 : 0; break;
-        case 2: p.expected = size_t(b) << 8; p.state = 3; break;
-        case 3:
-          p.expected |= b;
-          p.received = 0;
-          p.state = (p.expected > 0 && p.expected <= MAX_PAYLOAD) ? 4 : 0;  // drop bad lengths
-          break;
-        case 4:
-          p.buf[p.received++] = b;
-          if (p.received == p.expected) {
-            handleToRadio(idx, p.buf, p.expected);
-            p.state = 0;
-          }
-          break;
-      }
-    }
+    int n;
+    while (s.active && s.sock.available() && (n = s.sock.read(chunk, sizeof(chunk))) > 0)
+      for (int k = 0; k < n; k++) parseClientByte(idx, chunk[k]);
   }
 }
 
@@ -984,7 +1074,9 @@ static String discoveryHead(const Owner& o, const char* component, const String&
 
 static void publishDiscovery(const char* component, const String& ownerId, const String& objKey, const String& payload) {
   String topic = cfg.mqttDiscovery + "/" + component + "/" + ownerId + "/" + objKey + "/config";
-  mqtt.publish(topic.c_str(), payload.c_str(), true);
+  if (!mqtt.publish(topic.c_str(), payload.c_str(), true))
+    logf("[MQTT] discovery %s/%s not sent (%u bytes, max %u)", component, objKey.c_str(), payload.length() + topic.length(),
+         mqtt.getBufferSize());
 }
 
 // HA-side template: seconds -> "42s", "5m 03s", "1h 23m 05s" or "2d 03h 15m 09s" (leading zero units hidden)
@@ -995,190 +1087,50 @@ static String humanDuration(const char* key) {
          " else (('%dm %02ds' % (m, s)) if m else ('%ds' % s))) }}";
 }
 
-// ---------- discovery file (ha_mqtt_discovery.json) ----------
+// ---------- entities (ha_entities.h) ----------
 
-static const char* DISCOVERY_FILE = "/ha_mqtt_discovery.json";
-static const size_t DISCOVERY_MAX_BYTES = 16384;
-static bool fsReady = false;
-
-// Every field the bridge publishes, and the topic it is on; entities may only read these
-struct PublishedField { const char* name; const char* topic; };
-static const PublishedField PUBLISHED_FIELDS[] = {
-  {"ble_connected", "state"}, {"ble_state", "state"}, {"ble_enabled", "state"}, {"ble_rssi", "state"},
-  {"ble_uptime", "state"}, {"ble_reconnects", "state"}, {"node_name", "state"}, {"tcp_clients", "state"},
-  {"wifi_rssi", "state"}, {"ip", "state"}, {"uptime", "state"}, {"free_heap", "state"},
-  {"wifi_ssid", "state"}, {"wifi_mac", "state"}, {"dns", "state"}, {"temperature", "state"},
-  {"status", "status"},  // online/offline (last will), as plain text
-  {"node_battery", "node"}, {"node_powered", "node"}, {"node_voltage", "node"}, {"node_ch_util", "node"},
-  {"node_air_util", "node"}, {"node_uptime", "node"}, {"node_online", "node"}, {"node_total", "node"},
-  {"node_pkt_rx", "node"}, {"node_pkt_tx", "node"}, {"node_pkt_rx_bad", "node"}, {"node_noise_floor", "node"},
-  {"node_rx_dupe", "node"}, {"node_tx_relay", "node"}, {"node_tx_relay_canceled", "node"},
-  {"node_tx_dropped", "node"}, {"node_heap_free", "node"}, {"node_fw", "node"}, {"node_hw", "node"},
-  {"node_role", "node"}, {"node_radio", "node"}, {"node_id", "node"}, {"node_long_name", "node"},
-  {"node_short_name", "node"}, {"node_heap_total", "node"}, {"node_latitude", "node"},
-  {"node_longitude", "node"}, {"node_altitude", "node"}};
-
-static const char* fieldTopic(const char* field) {
-  for (const PublishedField& f : PUBLISHED_FIELDS)
-    if (strcmp(f.name, field) == 0) return f.topic;
-  return nullptr;
-}
-
-// Keys used by the firmware's own controls (buttons, switch) or by old versions
-static bool reservedEntityKey(const char* key) {
-  for (const char* k : {"restart", "bluetooth_reconnect", "bluetooth_link", "reconnect_ble", "ble_link", "pause_ble", "resume_ble"})
-    if (strcmp(k, key) == 0) return true;
-  return false;
-}
-
-// File keys the bridge consumes itself (everything else is passed to HA unchanged)
-static bool bridgeOnlyKey(const char* k) {
-  for (const char* r : {"key", "name", "field", "component", "format", "diagnostic",
-                        "unique_id", "availability_topic", "device", "state_topic"})
-    if (strcmp(r, k) == 0) return true;
-  return false;
-}
-
-static bool validEntityKey(const char* key) {
-  size_t n = strlen(key);
-  if (n == 0 || n > 40) return false;
-  for (size_t i = 0; i < n; i++)
-    if (!islower(key[i]) && !isdigit(key[i]) && key[i] != '_') return false;
-  return true;
-}
-
-struct DiscoveryInfo {
-  bool custom = false;
-  String fileName;
-  uint64_t loadedAt = 0;  // browser time (ms since epoch) of the upload; the ESP32 has no clock
-  uint16_t entities = 0, ignored = 0;
-};
-static DiscoveryInfo discoveryInfo;
-
-static String readDiscoveryDoc() {
-  if (fsReady && LittleFS.exists(DISCOVERY_FILE)) {
-    File f = LittleFS.open(DISCOVERY_FILE, "r");
-    String s = f ? f.readString() : String();
-    f.close();
-    if (s.length()) return s;
-  }
-  return String(DISCOVERY_DEFAULT);
-}
-
-// Calls fn(entity, component, key, field) for every usable entity.
-// Returns false if the text is not a discovery document at all.
-template <typename Fn>
-static bool forEachEntity(const String& text, uint16_t& valid, uint16_t& ignored, Fn fn) {
-  JsonDocument doc;
-  valid = ignored = 0;
-  if (deserializeJson(doc, text)) return false;
-  JsonArray list = doc["entities"].as<JsonArray>();
-  if (list.isNull()) return false;
-  std::vector<String> seen;
-  for (JsonVariant v : list) {
-    JsonObject e = v.as<JsonObject>();
-    const char* key = e["key"] | "";
-    const char* name = e["name"] | "";
-    const char* comp = e["component"] | "sensor";
-    const char* field = e["field"] | key;
-    bool ok = !e.isNull() && validEntityKey(key) && !reservedEntityKey(key) && *name && fieldTopic(field) &&
-              (strcmp(comp, "sensor") == 0 || strcmp(comp, "binary_sensor") == 0) &&
-              std::find(seen.begin(), seen.end(), String(key)) == seen.end();
-    if (!ok) {
-      ignored++;
-      continue;
-    }
-    seen.push_back(key);
-    valid++;
-    fn(e, comp, key, field);
-  }
-  return true;
-}
-
-static void loadDiscoveryInfo() {
-  discoveryInfo = DiscoveryInfo();
-  discoveryInfo.custom = fsReady && LittleFS.exists(DISCOVERY_FILE);
-  if (discoveryInfo.custom) {
-    prefs.begin("bridge", true);
-    discoveryInfo.fileName = prefs.getString("dc_name", "ha_mqtt_discovery.json");
-    discoveryInfo.loadedAt = prefs.getULong64("dc_ts", 0);
-    prefs.end();
-  }
-  forEachEntity(readDiscoveryDoc(), discoveryInfo.entities, discoveryInfo.ignored,
-                [](JsonObject, const char*, const char*, const char*) {});
-}
-
-static bool isNodeField(const char* field) { return strcmp(fieldTopic(field), "node") == 0; }
+static bool isNodeEntity(const HaEntity& e) { return strcmp(e.topic, "node") == 0; }
+static const char* componentName(const HaEntity& e) { return e.component == HaComponent::BinarySensor ? "binary_sensor" : "sensor"; }
 
 // Node entities drop the "node_" prefix: they already sit on the node's own device
-static String objectKey(const char* key, bool nodeEntity) {
-  return nodeEntity && strncmp(key, "node_", 5) == 0 ? String(key + 5) : String(key);
+static String objectKey(const HaEntity& e) {
+  return isNodeEntity(e) && strncmp(e.key, "node_", 5) == 0 ? String(e.key + 5) : String(e.key);
 }
 
 static uint32_t publishedNodeNum = 0;  // node whose device is announced in HA (NVS "dc_node")
 static String publishedNodeSig;        // node device info last announced; empty = announce again
 
-// One entity from the discovery file -> its HA config message
-static void publishEntity(JsonObject e, const char* comp, const char* key, const char* field, const Owner& owner) {
+// One table entry -> its HA config message
+static void publishEntity(const HaEntity& e, const Owner& owner) {
   // "status" reads the availability topic itself, so it shows Disconnected instead of Unavailable
-  bool statusField = strcmp(field, "status") == 0;
-  String obj = objectKey(key, isNodeField(field));
-  String j = discoveryHead(owner, comp, obj, e["name"].as<const char*>(), !statusField);
-  j += ",\"state_topic\":\"" + mqttRoot() + "/" + fieldTopic(field) + "\"";
-  if (!e["value_template"].is<const char*>()) {
-    String tpl;
-    if (statusField) tpl = "{{ 'ON' if value == 'online' else 'OFF' }}";
-    else if (strcmp(e["format"] | "", "duration") == 0) tpl = humanDuration(field);
-    else tpl = "{{ value_json." + String(field) + " }}";
-    j += ",\"value_template\":\"" + jsonEscape(tpl) + "\"";
-  }
-  if (e["diagnostic"] | false) j += ",\"entity_category\":\"diagnostic\"";
-  if (strcmp(comp, "binary_sensor") == 0 && !e["payload_on"].is<const char*>()) j += ",\"payload_on\":\"ON\",\"payload_off\":\"OFF\"";
-  for (JsonPair kv : e) {
-    if (bridgeOnlyKey(kv.key().c_str())) continue;
-    String v;
-    serializeJson(kv.value(), v);
-    j += ",\"" + jsonEscape(kv.key().c_str()) + "\":" + v;
-  }
+  bool statusField = strcmp(e.topic, "status") == 0;
+  String obj = objectKey(e);
+  String j = discoveryHead(owner, componentName(e), obj, e.name, !statusField);
+  j += ",\"state_topic\":\"" + mqttRoot() + "/" + e.topic + "\"";
+  String tpl;
+  if (statusField) tpl = "{{ 'ON' if value == 'online' else 'OFF' }}";
+  else if (e.duration) tpl = humanDuration(e.key);
+  else tpl = "{{ value_json." + String(e.key) + " }}";
+  j += ",\"value_template\":\"" + jsonEscape(tpl) + "\"";
+  if (e.diagnostic) j += ",\"entity_category\":\"diagnostic\"";
+  if (e.component == HaComponent::BinarySensor) j += ",\"payload_on\":\"ON\",\"payload_off\":\"OFF\"";
+  if (*e.extra) j += String(",") + e.extra;
   j += "}";
-  publishDiscovery(comp, owner.id, obj, j);
+  publishDiscovery(componentName(e), owner.id, obj, j);
 }
 
-// Publishes the file's entities of one owner (bridge or node); returns false if the file is unreadable
-static bool publishFileEntities(bool nodeEntities, const Owner& owner, uint16_t& valid) {
-  uint16_t total, ignored;
-  valid = 0;
-  auto pub = [&](JsonObject e, const char* comp, const char* key, const char* field) {
-    if (isNodeField(field) != nodeEntities) return;
-    publishEntity(e, comp, key, field, owner);
-    valid++;
-  };
-  if (forEachEntity(readDiscoveryDoc(), total, ignored, pub)) return true;
-  logf("[MQTT] discovery file unreadable, using the default");
-  forEachEntity(String(DISCOVERY_DEFAULT), total, ignored, pub);
-  return false;
+// Publishes the entities of one device (bridge or node); returns how many
+static uint16_t publishEntities(bool nodeEntities, const Owner& owner) {
+  uint16_t n = 0;
+  for (const HaEntity& e : HA_ENTITIES)
+    if (isNodeEntity(e) == nodeEntities) {
+      publishEntity(e, owner);
+      n++;
+    }
+  return n;
 }
 
-// Deletes in HA the entities of `previous` that `current` no longer has (empty retained config)
-static void removeDroppedEntities(const String& previous, const String& current) {
-  std::vector<String> keep;
-  uint16_t v, ig;
-  forEachEntity(current, v, ig, [&](JsonObject, const char* comp, const char* key, const char*) {
-    keep.push_back(String(comp) + "/" + key);
-  });
-  forEachEntity(previous, v, ig, [&](JsonObject, const char* comp, const char* key, const char* field) {
-    String id = String(comp) + "/" + key;
-    if (std::find(keep.begin(), keep.end(), id) != keep.end()) return;
-    bool nodeEntity = isNodeField(field);
-    if (nodeEntity && !publishedNodeNum) return;  // node device never announced: nothing to delete
-    String owner = "mbb_" + chipId;
-    if (nodeEntity) owner = "mbn_" + nodeHex(publishedNodeNum);
-    publishDiscovery(comp, owner, objectKey(key, nodeEntity), "");
-    logf("[MQTT] discovery: removed %s", id.c_str());
-  });
-}
-
-// Entities of the bridge's own device: controls (fixed) + bridge sensors from the file
+// Entities of the bridge's own device: controls + bridge sensors
 static void publishAllDiscovery() {
   String root = mqttRoot();
   Owner bridge = bridgeOwner();
@@ -1203,9 +1155,7 @@ static void publishAllDiscovery() {
   sw += ",\"state_on\":\"ON\",\"state_off\":\"OFF\",\"icon\":\"mdi:bluetooth-connect\"}";
   publishDiscovery("switch", bridge.id, "bluetooth_link", sw);
 
-  uint16_t valid;
-  publishFileEntities(false, bridge, valid);
-  logf("[MQTT] discovery published: bridge, %u entities%s", valid, discoveryInfo.custom ? " from file" : "");
+  logf("[MQTT] discovery published: bridge, %u entities", publishEntities(false, bridge));
   publishedNodeSig = "";  // node device follows as soon as the node is known
 }
 
@@ -1217,26 +1167,23 @@ static String nodeSignature() {
 // Deletes every entity of a node device (bridge now talks to another node)
 static void removeNodeEntities(uint32_t num) {
   String owner = "mbn_" + nodeHex(num);
-  uint16_t v, ig;
-  forEachEntity(readDiscoveryDoc(), v, ig, [&](JsonObject, const char* comp, const char* key, const char* field) {
-    if (isNodeField(field)) publishDiscovery(comp, owner, objectKey(key, true), "");
-  });
+  for (const HaEntity& e : HA_ENTITIES)
+    if (isNodeEntity(e)) publishDiscovery(componentName(e), owner, objectKey(e), "");
   publishDiscovery("device_tracker", owner, "position", "");
+  publishDiscovery("button", owner, "restart", "");
   logf("[MQTT] discovery: removed node !%s", nodeHex(num).c_str());
 }
 
-// Entities of the node's own device: node sensors from the file + position tracker
+// Entities of the node's own device: node sensors + restart button + position tracker
 static void publishNodeDiscovery() {
   if (publishedNodeNum != node.num) {
     if (publishedNodeNum) {
       removeNodeEntities(publishedNodeNum);
     } else {
       // First node device on this bridge: remove the node entities v1.3.3 put on the bridge device
-      Owner bridge = bridgeOwner();
-      uint16_t v, ig;
-      forEachEntity(readDiscoveryDoc(), v, ig, [&](JsonObject, const char* comp, const char* key, const char* field) {
-        if (isNodeField(field)) publishDiscovery(comp, bridge.id, key, "");
-      });
+      String bridgeId = "mbb_" + chipId;
+      for (const HaEntity& e : HA_ENTITIES)
+        if (isNodeEntity(e)) publishDiscovery(componentName(e), bridgeId, e.key, "");
     }
     publishedNodeNum = node.num;
     prefs.begin("bridge", false);
@@ -1244,8 +1191,12 @@ static void publishNodeDiscovery() {
     prefs.end();
   }
   Owner owner = nodeOwner(node.num);
-  uint16_t valid;
-  publishFileEntities(true, owner, valid);
+  uint16_t valid = publishEntities(true, owner);
+  // Restart the node (Controls block of the node device)
+  String rb = discoveryHead(owner, "button", "restart", "Restart");
+  rb += ",\"command_topic\":\"" + mqttRoot() + "/cmd\",\"payload_press\":\"node_restart\",\"device_class\":\"restart\"}";
+  publishDiscovery("button", owner.id, "restart", rb);
+  valid++;
   if (node.posAt) {
     // Name null = the tracker takes the device name
     String t = discoveryHead(owner, "device_tracker", "position", nullptr);
@@ -1310,7 +1261,7 @@ static void publishState() {
   j += ",\"tcp_clients\":" + String(activeClientCount());
   j += ",\"wifi_rssi\":" + String(WiFi.RSSI());
   j += ",\"ip\":\"" + WiFi.localIP().toString() + "\"";
-  j += ",\"uptime\":" + String(millis() / 1000);
+  j += ",\"uptime\":" + String(uptimeSec());
   j += ",\"free_heap\":" + String(ESP.getFreeHeap() / 1024);
   j += ",\"wifi_ssid\":\"" + jsonEscape(WiFi.SSID()) + "\",\"wifi_mac\":\"" + WiFi.macAddress() + "\"";
   j += ",\"dns\":\"" + WiFi.dnsIP().toString() + "\",\"temperature\":" + String(temperatureRead(), 1) + "}";
@@ -1330,6 +1281,8 @@ static void onMqttMessage(char* topic, byte* payload, unsigned int len) {
     restartAt = millis() + 500;
   } else if (msg == "ble_on" || msg == "ble_off") {
     setBleEnabled(msg == "ble_on", "MQTT");
+  } else if (msg == "node_restart") {
+    rebootNode("MQTT");
   } else if (msg == "bluetooth_reconnect" || msg == "reconnect_ble") {  // old name kept for existing automations
     logf("[MQTT] Bluetooth reconnect requested");
     if (bleClient && bleClient->isConnected()) bleClient->disconnect();
@@ -1392,7 +1345,21 @@ static void manageMqtt() {
 
 // ---------- web ----------
 
+// Browsers send Origin on cross-site POSTs: refuse those, so another website open in the
+// same browser can't change settings (matters most when the page has no password).
+// Requests without Origin (curl, scripts) are unaffected.
+static bool sameOrigin() {
+  String origin = web.header("Origin");
+  if (origin.isEmpty()) return true;
+  int sep = origin.indexOf("://");  // http or https (e.g. behind a reverse proxy)
+  return sep > 0 && origin.substring(sep + 3) == web.hostHeader();
+}
+
 static bool authorized() {
+  if (web.method() == HTTP_POST && !sameOrigin()) {
+    web.send(403, "text/plain", "Cross-origin request refused");
+    return false;
+  }
   // Empty password = open page (first-time setup); otherwise HTTP Basic auth
   if (cfg.webPass.isEmpty() || web.authenticate(cfg.webUser.c_str(), cfg.webPass.c_str())) return true;
   web.requestAuthentication();
@@ -1412,10 +1379,10 @@ static void handleStatus() {
 
   String j;
   j.reserve(2800);
-  j += "{\"version\":\"" + String(FW_VERSION) + "\",\"uptime\":" + String(millis() / 1000);
+  j += "{\"version\":\"" + String(FW_VERSION) + "\",\"uptime\":" + String(uptimeSec());
   j += ",\"hostname\":\"" + jsonEscape(cfg.hostname) + "\",\"default_hostname\":\"" + defaultHostname() + "\"";
   j += ",\"web_user\":\"" + jsonEscape(cfg.webUser) + "\",\"web_auth\":" + String(cfg.webPass.isEmpty() ? "false" : "true");
-  j += ",\"heap\":" + String(ESP.getFreeHeap());
+  j += ",\"heap\":" + String(ESP.getFreeHeap()) + ",\"heap_total\":" + String(ESP.getHeapSize());
   j += ",\"wifi\":{\"connected\":" + String(wifiUp ? "true" : "false");
   j += ",\"ssid\":\"" + jsonEscape(cfg.wifiSsid) + "\"";
   j += ",\"ip\":\"" + (wifiUp ? WiFi.localIP().toString() : String("")) + "\"";
@@ -1470,10 +1437,7 @@ static void handleStatus() {
   j += ",\"host\":\"" + jsonEscape(cfg.mqttHost) + "\",\"port\":" + String(cfg.mqttPort);
   j += ",\"user\":\"" + jsonEscape(cfg.mqttUser) + "\",\"has_pass\":" + String(cfg.mqttPass.isEmpty() ? "false" : "true");
   j += ",\"discovery\":\"" + jsonEscape(cfg.mqttDiscovery) + "\",\"base\":\"" + jsonEscape(cfg.mqttBase) + "\"";
-  j += ",\"topic\":\"" + jsonEscape(mqttRoot()) + "\",\"interval\":" + String(cfg.mqttInterval);
-  j += ",\"disc_custom\":" + String(discoveryInfo.custom ? "true" : "false");
-  j += ",\"disc_file\":\"" + jsonEscape(discoveryInfo.fileName) + "\",\"disc_loaded\":" + String(discoveryInfo.loadedAt);
-  j += ",\"disc_entities\":" + String(discoveryInfo.entities) + ",\"disc_ignored\":" + String(discoveryInfo.ignored) + "}";
+  j += ",\"topic\":\"" + jsonEscape(mqttRoot()) + "\",\"interval\":" + String(cfg.mqttInterval) + "}";
   j += ",\"tcp\":{\"max\":" + String(MAX_CLIENTS) + ",\"clients\":[";
   bool first = true;
   for (auto& s : sessions) {
@@ -1496,7 +1460,7 @@ static void handleLogs() {
     out += '\n';
   }
   // Lines carry uptime; the page converts them to the viewer's clock (like ESPHome)
-  web.sendHeader("X-Uptime", String(millis() / 1000));
+  web.sendHeader("X-Uptime", String(uptimeSec()));
   web.send(200, "text/plain; charset=utf-8", out);
 }
 
@@ -1534,28 +1498,25 @@ static void handleBleScanResults() {
   sendJson(j);
 }
 
-// Forget the BLE pairing on the bridge side and reconnect (node settings unchanged)
+// Node restart from the status page (confirmed on the page first)
+static void handleNodeReboot() {
+  if (!authorized()) return;
+  if (!rebootNode("web")) return sendError("not_connected");
+  sendOk();
+}
+
 static void handleBleEnable() {
   if (!authorized()) return;
   setBleEnabled(web.arg("enabled") == "1", "web");
   sendOk();
 }
 
-// Clear the configured node: no MAC, no pairing, bridge idle until a new node is chosen
-static void handleBleRemove() {
-  if (!authorized()) return;
-  cfg.bleMac = "";
-  saveSettings();
-  logf("[CFG] Bluetooth node removed");
-  applyBleTarget();
-  sendOk();
-}
-
-static void handleBleForget() {
-  if (!authorized()) return;
-  logf("[CFG] Bluetooth pairing forgotten");
-  applyBleTarget();
-  sendOk();
+// Meshtastic fixed PIN: exactly 6 digits
+static bool validPin(const String& p) {
+  if (p.length() != 6) return false;
+  for (size_t i = 0; i < p.length(); i++)
+    if (!isdigit(p[i])) return false;
+  return true;
 }
 
 static void handleBleConfig() {
@@ -1567,7 +1528,11 @@ static void handleBleConfig() {
 
   cfg.bleMac = mac;
   cfg.bleAddrType = web.hasArg("type") ? uint8_t(web.arg("type").toInt()) : BLE_ADDR_RANDOM;
-  if (web.arg("pin").length()) cfg.blePin = web.arg("pin").toInt();  // empty = keep current
+  String pin = web.arg("pin");
+  if (pin.length()) {  // empty = keep current
+    if (!validPin(pin)) return sendError("invalid_pin");
+    cfg.blePin = pin.toInt();
+  }
   saveSettings();
   logf("[CFG] BLE target %s (type %u)", cfg.bleMac.c_str(), cfg.bleAddrType);
   if (!cfg.bleEnabled) {
@@ -1603,13 +1568,32 @@ static void handleWifiScanResults() {
   sendJson(j);
 }
 
+// DHCP/mDNS hostname: lowercase letters, digits and '-', max 32 chars
+static bool validHostname(const String& h) {
+  if (h.isEmpty() || h.length() > 32 || h[0] == '-' || h[h.length() - 1] == '-') return false;
+  for (size_t i = 0; i < h.length(); i++) {
+    char c = h[i];
+    if (!(isdigit(c) || (c >= 'a' && c <= 'z') || c == '-')) return false;
+  }
+  return true;
+}
+
+// Wi-Fi network and the bridge's network name (DHCP/mDNS); both apply on a fresh join, so restart
 static void handleWifiConfig() {
   if (!authorized()) return;
-  if (web.arg("ssid").isEmpty()) return sendError("empty_ssid");
-  cfg.wifiSsid = web.arg("ssid");
-  cfg.wifiPass = web.arg("pass");
+  String ssid = web.arg("ssid");
+  if (ssid.isEmpty()) return sendError("empty_ssid");
+  String host = web.arg("hostname");
+  host.trim();
+  host.toLowerCase();
+  if (host.isEmpty()) host = defaultHostname();  // empty field = back to the default name
+  if (!validHostname(host)) return sendError("invalid_hostname");
+  // Empty password keeps the current one on the same network (the field is never prefilled)
+  if (web.arg("pass").length() || ssid != cfg.wifiSsid) cfg.wifiPass = web.arg("pass");
+  cfg.wifiSsid = ssid;
+  cfg.hostname = host;
   saveSettings();
-  logf("[CFG] WiFi set to '%s', restarting", cfg.wifiSsid.c_str());
+  logf("[CFG] WiFi '%s', name '%s', restarting", cfg.wifiSsid.c_str(), cfg.hostname.c_str());
   sendOk();
   restartAt = millis() + 1500;  // let the response go out first
 }
@@ -1627,30 +1611,6 @@ static void handleWebAuth() {
   sendOk();
 }
 
-// DHCP/mDNS hostname: lowercase letters, digits and '-', max 32 chars
-static bool validHostname(const String& h) {
-  if (h.isEmpty() || h.length() > 32 || h[0] == '-' || h[h.length() - 1] == '-') return false;
-  for (size_t i = 0; i < h.length(); i++) {
-    char c = h[i];
-    if (!(isdigit(c) || (c >= 'a' && c <= 'z') || c == '-')) return false;
-  }
-  return true;
-}
-
-static void handleDeviceConfig() {
-  if (!authorized()) return;
-  String host = web.arg("hostname");
-  host.trim();
-  host.toLowerCase();
-  if (host.isEmpty()) host = defaultHostname();  // empty field = back to the default name
-  if (!validHostname(host)) return sendError("invalid_hostname");
-  cfg.hostname = host;
-  saveSettings();
-  logf("[CFG] hostname '%s', restarting", cfg.hostname.c_str());
-  sendOk();
-  restartAt = millis() + 1500;  // hostname only applies on a fresh WiFi join
-}
-
 // Wipe all settings and pairings -> next boot is a first-time setup
 static void handleFactoryReset() {
   if (!authorized()) return;
@@ -1658,10 +1618,17 @@ static void handleFactoryReset() {
   prefs.clear();
   prefs.end();
   NimBLEDevice::deleteAllBonds();
-  if (fsReady) LittleFS.remove(DISCOVERY_FILE);
   logf("[CFG] factory reset, restarting");
   sendOk();
   restartAt = millis() + 1500;
+}
+
+// MQTT topic prefix: no wildcards, spaces or leading/trailing '/'
+static bool validTopic(const String& t) {
+  if (t.isEmpty() || t.length() > 64 || t[0] == '/' || t[t.length() - 1] == '/') return false;
+  for (size_t i = 0; i < t.length(); i++)
+    if (t[i] == '#' || t[i] == '+' || t[i] == ' ' || uint8_t(t[i]) < 0x20) return false;
+  return true;
 }
 
 static void handleMqttConfig() {
@@ -1674,6 +1641,12 @@ static void handleMqttConfig() {
   long interval = web.hasArg("interval") ? web.arg("interval").toInt() : 30;
   if (port < 1 || port > 65535) return sendError("invalid_port");
   if (interval < 5 || interval > 3600) return sendError("invalid_interval");
+  String disc = web.arg("discovery"), base = web.arg("base");
+  disc.trim();
+  base.trim();
+  if (disc.isEmpty()) disc = "homeassistant";
+  if (base.isEmpty()) base = PROJECT_SLUG;
+  if (!validTopic(disc) || !validTopic(base)) return sendError("invalid_topic");
 
   cfg.mqttEnabled = enabled;
   cfg.mqttHost = host;
@@ -1681,83 +1654,12 @@ static void handleMqttConfig() {
   cfg.mqttUser = web.arg("user");
   if (web.arg("pass").length()) cfg.mqttPass = web.arg("pass");  // empty = keep current
   if (web.arg("clear_pass") == "1") cfg.mqttPass = "";
-  cfg.mqttDiscovery = web.arg("discovery").isEmpty() ? String("homeassistant") : web.arg("discovery");
-  cfg.mqttBase = web.arg("base").isEmpty() ? String(PROJECT_SLUG) : web.arg("base");
+  cfg.mqttDiscovery = disc;
+  cfg.mqttBase = base;
   cfg.mqttInterval = uint16_t(interval);
   saveSettings();
   logf("[CFG] MQTT %s (%s:%u)", enabled ? "enabled" : "disabled", host.c_str(), cfg.mqttPort);
   mqttReset();
-  sendOk();
-}
-
-// Download: the file in use (uploaded one, or the firmware default as a starting point)
-static void handleDiscoveryGet() {
-  if (!authorized()) return;
-  web.sendHeader("Content-Disposition", "attachment; filename=\"ha_mqtt_discovery.json\"");
-  web.send(200, "application/json", readDiscoveryDoc());
-}
-
-// Fields an entity can read, with their current values (helps writing the file)
-static void handleDiscoveryFields() {
-  if (!authorized()) return;
-  String j = "{\"fields\":[";
-  for (size_t i = 0; i < sizeof(PUBLISHED_FIELDS) / sizeof(PUBLISHED_FIELDS[0]); i++) {
-    if (i) j += ',';
-    j += "{\"field\":\"" + String(PUBLISHED_FIELDS[i].name) + "\",\"topic\":\"" + PUBLISHED_FIELDS[i].topic + "\"}";
-  }
-  j += "]}";
-  sendJson(j);
-}
-
-// Republishes after a change; entities the new set dropped are deleted in HA
-static void applyDiscoveryChange(const String& previous) {
-  loadDiscoveryInfo();
-  if (!mqtt.connected()) {
-    logf("[MQTT] discovery changed; published on the next broker connection");
-    return;
-  }
-  removeDroppedEntities(previous, readDiscoveryDoc());
-  publishAllDiscovery();
-  publishState();
-  if (node.num) publishNodeState();
-}
-
-static void handleDiscoveryUpload() {
-  if (!authorized()) return;
-  if (!fsReady) return sendError("no_storage");
-  String body = web.arg("plain");
-  if (body.isEmpty()) return sendError("invalid_file");
-  if (body.length() > DISCOVERY_MAX_BYTES) return sendError("file_too_big");
-  uint16_t valid, ignored;
-  if (!forEachEntity(body, valid, ignored, [](JsonObject, const char*, const char*, const char*) {}))
-    return sendError("invalid_json");
-  if (!valid) return sendError("no_entities");
-
-  String previous = readDiscoveryDoc();
-  File f = LittleFS.open(DISCOVERY_FILE, "w");
-  bool written = f && f.print(body) == body.length();
-  f.close();
-  if (!written) return sendError("write_failed");
-  String name = web.arg("name");
-  prefs.begin("bridge", false);
-  prefs.putString("dc_name", name.isEmpty() ? String("ha_mqtt_discovery.json") : name.substring(0, 64));
-  prefs.putULong64("dc_ts", strtoull(web.arg("ts").c_str(), nullptr, 10));
-  prefs.end();
-  logf("[MQTT] discovery file loaded: %u entities, %u ignored", valid, ignored);
-  applyDiscoveryChange(previous);
-  sendJson("{\"ok\":true,\"entities\":" + String(valid) + ",\"ignored\":" + String(ignored) + "}");
-}
-
-static void handleDiscoveryReset() {
-  if (!authorized()) return;
-  String previous = readDiscoveryDoc();
-  if (fsReady) LittleFS.remove(DISCOVERY_FILE);
-  prefs.begin("bridge", false);
-  prefs.remove("dc_name");
-  prefs.remove("dc_ts");
-  prefs.end();
-  logf("[MQTT] discovery reset to the firmware default");
-  applyDiscoveryChange(previous);
   sendOk();
 }
 
@@ -1778,7 +1680,7 @@ static void handleOtaDone() {
 static void handleOtaChunk() {
   HTTPUpload& up = web.upload();
   if (up.status == UPLOAD_FILE_START) {
-    otaRejected = !cfg.webPass.isEmpty() && !web.authenticate(cfg.webUser.c_str(), cfg.webPass.c_str());
+    otaRejected = !sameOrigin() || (!cfg.webPass.isEmpty() && !web.authenticate(cfg.webUser.c_str(), cfg.webPass.c_str()));
     if (otaRejected) return;
     logf("[OTA] receiving %s", up.filename.c_str());
     if (bleClient && bleClient->isConnected()) bleClient->disconnect();  // free radio time
@@ -1805,21 +1707,15 @@ static void setupWeb() {
   web.on("/api/ble/scan", HTTP_POST, handleBleScanStart);
   web.on("/api/ble/scan", HTTP_GET, handleBleScanResults);
   web.on("/api/ble/config", HTTP_POST, handleBleConfig);
-  web.on("/api/ble/forget", HTTP_POST, handleBleForget);
   web.on("/api/ble/enable", HTTP_POST, handleBleEnable);
-  web.on("/api/ble/remove", HTTP_POST, handleBleRemove);
+  web.on("/api/node/reboot", HTTP_POST, handleNodeReboot);
   web.on("/api/wifi/scan", HTTP_POST, handleWifiScanStart);
   web.on("/api/wifi/scan", HTTP_GET, handleWifiScanResults);
   web.on("/api/wifi/config", HTTP_POST, handleWifiConfig);
   web.on("/api/web/auth", HTTP_POST, handleWebAuth);
   web.on("/api/reboot", HTTP_POST, handleReboot);
   web.on("/api/factory-reset", HTTP_POST, handleFactoryReset);
-  web.on("/api/device/config", HTTP_POST, handleDeviceConfig);
   web.on("/api/mqtt/config", HTTP_POST, handleMqttConfig);
-  web.on("/api/mqtt/discovery", HTTP_GET, handleDiscoveryGet);
-  web.on("/api/mqtt/discovery", HTTP_POST, handleDiscoveryUpload);
-  web.on("/api/mqtt/discovery/reset", HTTP_POST, handleDiscoveryReset);
-  web.on("/api/mqtt/fields", HTTP_GET, handleDiscoveryFields);
   web.on("/api/update", HTTP_POST, handleOtaDone, handleOtaChunk);
   web.onNotFound([]() {
     // Captive portal: send phones/laptops on the setup AP to the config page
@@ -1830,6 +1726,8 @@ static void setupWeb() {
       web.send(404, "text/plain", "Not found");
     }
   });
+  static const char* headers[] = {"Origin"};  // read by sameOrigin()
+  web.collectHeaders(headers, 1);
   web.begin();
 }
 
@@ -1873,12 +1771,10 @@ void setup() {
     MDNS.addServiceTxt("meshtastic", "tcp", "node", cfg.bleMac.c_str());
     MDNS.addService("http", "tcp", 80);
   }
-  // Holds the uploaded discovery file; formatted on first boot, untouched by OTA
-  fsReady = LittleFS.begin(true);
-  if (!fsReady) logf("[FS] LittleFS unavailable, discovery file disabled");
-  loadDiscoveryInfo();
-  prefs.begin("bridge", true);
+  prefs.begin("bridge", false);
   publishedNodeNum = prefs.getUInt("dc_node", 0);
+  prefs.remove("dc_name");  // left by the discovery file upload (v1.3.4)
+  prefs.remove("dc_ts");
   prefs.end();
 
   tcpServer.begin();
@@ -1896,7 +1792,7 @@ void setup() {
 }
 
 void loop() {
-  if (restartAt && millis() > restartAt) ESP.restart();
+  if (restartAt && int32_t(millis() - restartAt) >= 0) ESP.restart();  // wrap-safe
 
   manageWifi();
   web.handleClient();
