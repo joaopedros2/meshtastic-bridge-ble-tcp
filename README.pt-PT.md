@@ -34,7 +34,7 @@ Qualquer ESP32 com **Wi-Fi + Bluetooth LE** e **pelo menos 4 MB de flash**:
 | ESP32-S3 DevKit | `esp32s3` | `…-esp32s3.bin` | 🟡 Compila — ainda não testada |
 | ESP32-C3 DevKit | `esp32c3` | `…-esp32c3.bin` | 🟡 Compila — ainda não testada |
 | ESP32-C6 DevKit | `esp32c6` | `…-esp32c6.bin` | 🟡 Compila — ainda não testada |
-| Seeed Studio XIAO ESP32-C3 | `xiao_esp32c3` | `…-xiao-esp32c3.bin` | 🟡 Compila — ainda não testada |
+| Seeed Studio XIAO ESP32-C3 | `xiao_esp32c3` | `…-xiao-esp32c3.bin` | ✅ Testada (com a antena externa) |
 | Seeed Studio XIAO ESP32-S3 | `xiao_esp32s3` | `…-xiao-esp32s3.bin` | 🟡 Compila — ainda não testada |
 | Outras placas ESP32 | ver abaixo | — | 🟡 Compila-o tu |
 | ESP32-S2 (sem Bluetooth), ESP32-H2 (sem Wi-Fi) | — | — | ❌ Não é possível |
